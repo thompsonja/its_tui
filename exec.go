@@ -22,7 +22,7 @@ func watchKubectl(ctx context.Context, instanceName string) {
 		prog.Send(minikubeSetMsg{"No instance selected"})
 		return
 	}
-	runKubectlGetPods() // immediate first run
+	prog.Send(minikubeSetMsg{"Waiting for cluster..."})
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -39,7 +39,7 @@ func runKubectlGetPods() {
 	out, err := exec.Command("kubectl", "get", "pods").CombinedOutput()
 	lines := splitLines(string(out))
 	if err != nil && len(lines) == 0 {
-		lines = []string{fmt.Sprintf("error: %v", err)}
+		lines = []string{"Waiting for cluster to be ready..."}
 	}
 	prog.Send(minikubeSetMsg(lines))
 }
@@ -53,10 +53,8 @@ func watchSkaffoldLog(ctx context.Context, path, instanceName string) {
 		prog.Send(skaffoldLineMsg("No instance selected"))
 		return
 	}
-	if _, err := os.Stat(path); err != nil {
-		prog.Send(skaffoldLineMsg(fmt.Sprintf("Skaffold log `%s` not found (run 'start' to create it)", path)))
-	}
-	cmd := exec.CommandContext(ctx, "tail", "-F", "-n", "0", path)
+	prog.Send(skaffoldLineMsg("Waiting for skaffold..."))
+	cmd := exec.CommandContext(ctx, "tail", "-F", "-n", "50", path)
 	streamCmd(ctx, cmd, func(line string) tea.Msg {
 		if strings.HasPrefix(line, "tail: ") {
 			return nil // filter tail's own diagnostics

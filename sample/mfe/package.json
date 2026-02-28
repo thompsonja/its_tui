@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "description": "Hello World micro-frontend",
   "scripts": {
-    "start": "node index.js"
+    "start": "PORT=4123 node index.js"
   }
 }
