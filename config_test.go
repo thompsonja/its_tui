@@ -257,12 +257,11 @@ func TestWriteCustomConfig(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "state.json")
 	cfg := CustomInstanceConfig{
-		Instance: "myinst",
-		CPU:      "4",
-		RAM:      "4g",
-		Backends: []string{"auth-service", "user-service"},
-		BFFs:     []string{"web-bff"},
-		Mode:     "dev",
+		Instance:   "myinst",
+		CPU:        "4",
+		RAM:        "4g",
+		Components: []string{"checkout-backend", "user-bff"},
+		Mode:       "dev",
 	}
 	if err := WriteCustomConfig(statePath, "myinst", cfg); err != nil {
 		t.Fatalf("WriteCustomConfig: %v", err)
@@ -273,45 +272,55 @@ func TestWriteCustomConfig(t *testing.T) {
 		t.Fatalf("selections file not created: %v", err)
 	}
 	content := string(data)
-	for _, want := range []string{"auth-service", "user-service", "web-bff", "\"mode\"", "dev"} {
+	for _, want := range []string{"checkout-backend", "user-bff", "\"mode\"", "dev"} {
 		if !strings.Contains(content, want) {
 			t.Errorf("expected %q in output, got:\n%s", want, content)
 		}
 	}
 }
 
-// ── loadOptions ───────────────────────────────────────────────────────────────
+// ── LoadComponents ────────────────────────────────────────────────────────────
 
-func TestLoadOptions_Basic(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "opts.txt")
-	if err := os.WriteFile(path, []byte("alpha\nbeta\n\ngamma\n"), 0o644); err != nil {
-		t.Fatal(err)
+func TestLoadComponents_MissingFile(t *testing.T) {
+	cf, err := LoadComponents("/nonexistent/components.json")
+	if err != nil {
+		t.Fatalf("missing file should not error, got: %v", err)
 	}
-	opts := loadOptions(path)
-	if len(opts) != 3 {
-		t.Fatalf("expected 3 options, got %v", opts)
-	}
-	if opts[0] != "alpha" || opts[1] != "beta" || opts[2] != "gamma" {
-		t.Fatalf("unexpected options: %v", opts)
+	if len(cf.Systems) != 0 {
+		t.Fatalf("expected empty, got %v", cf)
 	}
 }
 
-func TestLoadOptions_MissingFile(t *testing.T) {
-	opts := loadOptions("/nonexistent/opts.txt")
-	if opts != nil {
-		t.Fatalf("expected nil for missing file, got %v", opts)
+func TestLoadComponents_Valid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "components.json")
+	data := `{"systems":[{"name":"checkout","components":[{"name":"checkout-backend"},{"name":"checkout-bff"}]}]}`
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cf, err := LoadComponents(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cf.Systems) != 1 {
+		t.Fatalf("expected 1 system, got %d", len(cf.Systems))
+	}
+	if cf.Systems[0].Name != "checkout" {
+		t.Fatalf("expected checkout, got %q", cf.Systems[0].Name)
+	}
+	if len(cf.Systems[0].Components) != 2 {
+		t.Fatalf("expected 2 components, got %d", len(cf.Systems[0].Components))
 	}
 }
 
-func TestLoadOptions_BlankLines(t *testing.T) {
+func TestLoadComponents_Invalid(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "opts.txt")
-	if err := os.WriteFile(path, []byte("\n  \nalpha\n  \n"), 0o644); err != nil {
+	path := filepath.Join(dir, "components.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	opts := loadOptions(path)
-	if len(opts) != 1 || opts[0] != "alpha" {
-		t.Fatalf("expected only [alpha], got %v", opts)
+	_, err := LoadComponents(path)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON")
 	}
 }

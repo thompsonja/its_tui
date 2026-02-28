@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -178,17 +177,51 @@ func SetCurrentInstance(statePath, instanceName string) error {
 	return SaveState(statePath, s)
 }
 
+// ── Component catalogue ───────────────────────────────────────────────────────
+
+// ComponentEntry is one named component inside a system.
+type ComponentEntry struct {
+	Name string `json:"name"`
+}
+
+// System groups a set of components under a shared name.
+type System struct {
+	Name       string           `json:"name"`
+	Components []ComponentEntry `json:"components"`
+}
+
+// ComponentsFile is the top-level structure of sample/components.json.
+type ComponentsFile struct {
+	Systems []System `json:"systems"`
+}
+
+// LoadComponents parses the JSON file at path.
+// A missing file returns an empty ComponentsFile (not an error).
+func LoadComponents(path string) (ComponentsFile, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ComponentsFile{}, nil
+		}
+		return ComponentsFile{}, fmt.Errorf("reading components %s: %w", path, err)
+	}
+	var cf ComponentsFile
+	if err := json.Unmarshal(data, &cf); err != nil {
+		return ComponentsFile{}, fmt.Errorf("parsing components %s: %w", path, err)
+	}
+	return cf, nil
+}
+
 // ── Custom instance config ────────────────────────────────────────────────────
 
 // CustomInstanceConfig holds the selections made in the custom-instance wizard.
 type CustomInstanceConfig struct {
-	Instance string   `json:"instance"`
-	CPU      string   `json:"cpu"`
-	RAM      string   `json:"ram"`
-	Backends []string `json:"backends"`
-	BFFs     []string `json:"bffs"`
-	MFE      string   `json:"mfe,omitempty"`
-	Mode     string   `json:"mode"`
+	Instance   string   `json:"instance"`
+	CPU        string   `json:"cpu"`
+	RAM        string   `json:"ram"`
+	Components []string `json:"components"`
+	MFE        string   `json:"mfe,omitempty"`
+	Mode       string   `json:"mode"`
 }
 
 // WriteCustomConfig saves selections alongside the state file as
@@ -201,22 +234,6 @@ func WriteCustomConfig(statePath, instanceName string, cfg CustomInstanceConfig)
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
-}
-
-// loadOptions reads a plain-text file of options, one per line.
-// A missing file returns nil (not an error).
-func loadOptions(path string) []string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var opts []string
-	for _, line := range strings.Split(string(data), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
-			opts = append(opts, line)
-		}
-	}
-	return opts
 }
 
 // ── Path helpers ──────────────────────────────────────────────────────────────

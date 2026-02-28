@@ -54,72 +54,22 @@ const (
 
 // Custom wizard field indices.
 const (
-	custFieldName     = 0
-	custFieldCPU      = 1
-	custFieldRAM      = 2
-	custFieldBackends = 3
-	custFieldBFFs     = 4
-	custFieldMFE      = 5
-	custFieldMode     = 6
-	custFieldButtons  = 7
-	custNumFields     = 8
+	custFieldName       = 0
+	custFieldCPU        = 1
+	custFieldRAM        = 2
+	custFieldComponents = 3
+	custFieldMFE        = 4
+	custFieldMode       = 5
+	custFieldButtons    = 6
+	custNumFields       = 7
 )
 
-// multiSelect is a searchable, toggleable list used in the custom wizard.
-type multiSelect struct {
-	label     string
-	available []string
-	selected  []string
-	search    textinput.Model
-	filtered  []string
-	listIdx   int
-}
-
-func newMultiSelect(label string, available []string, inputW int) multiSelect {
-	si := textinput.New()
-	si.Placeholder = "type to filter…"
-	si.Width = inputW
-	ms := multiSelect{label: label, available: available, search: si}
-	ms.updateFilter()
-	return ms
-}
-
-func (ms *multiSelect) updateFilter() {
-	q := strings.ToLower(ms.search.Value())
-	ms.filtered = ms.filtered[:0]
-	if ms.filtered == nil {
-		ms.filtered = make([]string, 0, len(ms.available))
-	}
-	for _, opt := range ms.available {
-		if q == "" || strings.Contains(strings.ToLower(opt), q) {
-			ms.filtered = append(ms.filtered, opt)
-		}
-	}
-	if ms.listIdx >= len(ms.filtered) && len(ms.filtered) > 0 {
-		ms.listIdx = len(ms.filtered) - 1
-	}
-	if len(ms.filtered) == 0 {
-		ms.listIdx = 0
-	}
-}
-
-func (ms *multiSelect) isSelected(item string) bool {
-	for _, s := range ms.selected {
-		if s == item {
-			return true
-		}
-	}
-	return false
-}
-
-func (ms *multiSelect) toggle(item string) {
-	for i, s := range ms.selected {
-		if s == item {
-			ms.selected = append(ms.selected[:i], ms.selected[i+1:]...)
-			return
-		}
-	}
-	ms.selected = append(ms.selected, item)
+// pickerItem is one row in the hierarchical component picker: either a system
+// header or an individual component nested under a system.
+type pickerItem struct {
+	isSystem bool
+	system   string // system name
+	comp     string // component name; empty for system rows
 }
 
 type startWizard struct {
@@ -140,11 +90,105 @@ type startWizard struct {
 	custName       textinput.Model
 	cpuIdx         int
 	ramIdx         int
-	backends       multiSelect
-	bffs           multiSelect
 	custMFEInput   textinput.Model
 	custModeIdx    int
 	custConfirmIdx int
+
+	// ── Component picker (shown when custFieldComponents is active) ───────────
+	compAll          ComponentsFile
+	selectedComps    []string
+	compPickerOpen   bool
+	compPickerSearch textinput.Model
+	compPickerItems  []pickerItem // filtered view
+	compPickerIdx    int
+}
+
+func (w *startWizard) updateCompFilter() {
+	q := strings.ToLower(w.compPickerSearch.Value())
+	w.compPickerItems = w.compPickerItems[:0]
+	if w.compPickerItems == nil {
+		w.compPickerItems = make([]pickerItem, 0)
+	}
+	for _, sys := range w.compAll.Systems {
+		sysMatches := q == "" || strings.Contains(strings.ToLower(sys.Name), q)
+		var matched []ComponentEntry
+		for _, c := range sys.Components {
+			if sysMatches || strings.Contains(strings.ToLower(c.Name), q) {
+				matched = append(matched, c)
+			}
+		}
+		if len(matched) > 0 {
+			w.compPickerItems = append(w.compPickerItems, pickerItem{isSystem: true, system: sys.Name})
+			for _, c := range matched {
+				w.compPickerItems = append(w.compPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+			}
+		}
+	}
+	if w.compPickerIdx >= len(w.compPickerItems) && len(w.compPickerItems) > 0 {
+		w.compPickerIdx = len(w.compPickerItems) - 1
+	}
+	if len(w.compPickerItems) == 0 {
+		w.compPickerIdx = 0
+	}
+}
+
+func (w *startWizard) isCompSelected(name string) bool {
+	for _, s := range w.selectedComps {
+		if s == name {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *startWizard) toggleComp(name string) {
+	for i, s := range w.selectedComps {
+		if s == name {
+			w.selectedComps = append(w.selectedComps[:i], w.selectedComps[i+1:]...)
+			return
+		}
+	}
+	w.selectedComps = append(w.selectedComps, name)
+}
+
+// togglePickerItem toggles the item at idx. For system rows, toggles all
+// visible components; if all are already selected, deselects them.
+func (w *startWizard) togglePickerItem(idx int) {
+	if idx < 0 || idx >= len(w.compPickerItems) {
+		return
+	}
+	item := w.compPickerItems[idx]
+	if !item.isSystem {
+		w.toggleComp(item.comp)
+		return
+	}
+	// Collect visible components for this system.
+	var comps []string
+	for _, pi := range w.compPickerItems {
+		if !pi.isSystem && pi.system == item.system {
+			comps = append(comps, pi.comp)
+		}
+	}
+	allSelected := len(comps) > 0
+	for _, c := range comps {
+		if !w.isCompSelected(c) {
+			allSelected = false
+			break
+		}
+	}
+	for _, c := range comps {
+		if allSelected {
+			// Remove each one.
+			for i, s := range w.selectedComps {
+				if s == c {
+					w.selectedComps = append(w.selectedComps[:i], w.selectedComps[i+1:]...)
+					break
+				}
+			}
+		} else if !w.isCompSelected(c) {
+			w.selectedComps = append(w.selectedComps, c)
+		}
+	}
 }
 
 // newStartWizard creates a wizard pre-populated from the current model state.
@@ -202,18 +246,26 @@ func newStartWizard(m *model) *startWizard {
 	custMFEIn.CharLimit = 256
 	custMFEIn.Width = inputW
 
-	return &startWizard{
-		screen:       wizScreenSelect,
-		field:        wizFieldName,
-		nameInput:    nameIn,
-		configInput:  cfgIn,
-		browseFiles:  browseFiles,
-		browseIdx:    browseIdx,
-		custName:     custNameIn,
-		custMFEInput: custMFEIn,
-		backends:     newMultiSelect("Backends", loadOptions("sample/backends.txt"), inputW),
-		bffs:         newMultiSelect("BFFs", loadOptions("sample/bffs.txt"), inputW),
+	compSearch := textinput.New()
+	compSearch.Placeholder = "search systems or components…"
+	compSearch.Width = inputW
+
+	compsFile, _ := LoadComponents("sample/components.json")
+
+	wiz := &startWizard{
+		screen:           wizScreenSelect,
+		field:            wizFieldName,
+		nameInput:        nameIn,
+		configInput:      cfgIn,
+		browseFiles:      browseFiles,
+		browseIdx:        browseIdx,
+		custName:         custNameIn,
+		custMFEInput:     custMFEIn,
+		compAll:          compsFile,
+		compPickerSearch: compSearch,
 	}
+	wiz.updateCompFilter()
+	return wiz
 }
 
 // syncFocus focuses the active text input and blurs all others.
@@ -221,8 +273,7 @@ func (w *startWizard) syncFocus() {
 	w.nameInput.Blur()
 	w.configInput.Blur()
 	w.custName.Blur()
-	w.backends.search.Blur()
-	w.bffs.search.Blur()
+	w.compPickerSearch.Blur()
 	w.custMFEInput.Blur()
 	switch w.screen {
 	case wizScreenFile:
@@ -236,10 +287,10 @@ func (w *startWizard) syncFocus() {
 		switch w.custField {
 		case custFieldName:
 			w.custName.Focus()
-		case custFieldBackends:
-			w.backends.search.Focus()
-		case custFieldBFFs:
-			w.bffs.search.Focus()
+		case custFieldComponents:
+			if w.compPickerOpen {
+				w.compPickerSearch.Focus()
+			}
 		case custFieldMFE:
 			w.custMFEInput.Focus()
 		}

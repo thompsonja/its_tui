@@ -1,0 +1,39 @@
+{
+  "systems": [
+    {
+      "name": "checkout",
+      "components": [
+        {"name": "checkout-backend"},
+        {"name": "checkout-bff"}
+      ]
+    },
+    {
+      "name": "user",
+      "components": [
+        {"name": "user-service"},
+        {"name": "user-bff"}
+      ]
+    },
+    {
+      "name": "product",
+      "components": [
+        {"name": "product-service"},
+        {"name": "product-bff"}
+      ]
+    },
+    {
+      "name": "order",
+      "components": [
+        {"name": "order-service"},
+        {"name": "order-bff"}
+      ]
+    },
+    {
+      "name": "analytics",
+      "components": [
+        {"name": "analytics-backend"},
+        {"name": "analytics-bff"}
+      ]
+    }
+  ]
+}

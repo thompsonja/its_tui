@@ -128,122 +128,171 @@ func TestWrapContent_EmptyBuf(t *testing.T) {
 	}
 }
 
-// ── multiSelect ───────────────────────────────────────────────────────────────
+// ── component picker ─────────────────────────────────────────────────────────
 
-func newTestMS(available []string) multiSelect {
-	return newMultiSelect("test", available, 40)
+func newTestWiz() *startWizard {
+	si := textinput.New()
+	si.Width = 40
+	cf := ComponentsFile{Systems: []System{
+		{Name: "checkout", Components: []ComponentEntry{
+			{Name: "checkout-backend"},
+			{Name: "checkout-bff"},
+		}},
+		{Name: "user", Components: []ComponentEntry{
+			{Name: "user-service"},
+			{Name: "user-bff"},
+		}},
+	}}
+	wiz := &startWizard{compAll: cf, compPickerSearch: si}
+	wiz.updateCompFilter()
+	return wiz
 }
 
-func TestMultiSelect_UpdateFilter_EmptyQuery(t *testing.T) {
-	ms := newTestMS([]string{"alpha", "beta", "gamma"})
-	if len(ms.filtered) != 3 {
-		t.Fatalf("expected all 3 items, got %d", len(ms.filtered))
-	}
-}
-
-func TestMultiSelect_UpdateFilter_MatchesInfix(t *testing.T) {
-	ms := newTestMS([]string{"auth-service", "user-service", "product-service"})
-	ms.search.SetValue("user")
-	ms.updateFilter()
-	if len(ms.filtered) != 1 || ms.filtered[0] != "user-service" {
-		t.Fatalf("expected [user-service], got %v", ms.filtered)
-	}
-}
-
-func TestMultiSelect_UpdateFilter_CaseInsensitive(t *testing.T) {
-	ms := newTestMS([]string{"AuthService", "userservice"})
-	ms.search.SetValue("AUTH")
-	ms.updateFilter()
-	if len(ms.filtered) != 1 || ms.filtered[0] != "AuthService" {
-		t.Fatalf("expected [AuthService], got %v", ms.filtered)
+func TestUpdateCompFilter_EmptyQuery(t *testing.T) {
+	wiz := newTestWiz()
+	// 2 systems × (1 system header + N comps) = 2+2+2 = 6 items
+	if len(wiz.compPickerItems) != 6 {
+		t.Fatalf("expected 6 picker items, got %d", len(wiz.compPickerItems))
 	}
 }
 
-func TestMultiSelect_UpdateFilter_NoMatch(t *testing.T) {
-	ms := newTestMS([]string{"alpha", "beta"})
-	ms.search.SetValue("zzz")
-	ms.updateFilter()
-	if len(ms.filtered) != 0 {
-		t.Fatalf("expected no matches, got %v", ms.filtered)
+func TestUpdateCompFilter_BySystemName(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.compPickerSearch.SetValue("checkout")
+	wiz.updateCompFilter()
+	// system header + 2 components = 3
+	if len(wiz.compPickerItems) != 3 {
+		t.Fatalf("expected 3 items, got %d: %v", len(wiz.compPickerItems), wiz.compPickerItems)
+	}
+	if !wiz.compPickerItems[0].isSystem || wiz.compPickerItems[0].system != "checkout" {
+		t.Fatal("first item should be checkout system header")
 	}
 }
 
-func TestMultiSelect_UpdateFilter_ClampsListIdx(t *testing.T) {
-	ms := newTestMS([]string{"alpha", "beta", "gamma"})
-	ms.listIdx = 2
-	ms.search.SetValue("alpha")
-	ms.updateFilter()
-	// only 1 result; listIdx should clamp to 0
-	if ms.listIdx != 0 {
-		t.Fatalf("expected listIdx=0, got %d", ms.listIdx)
+func TestUpdateCompFilter_ByComponentName(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.compPickerSearch.SetValue("user-bff")
+	wiz.updateCompFilter()
+	// user system header + 1 matching component = 2
+	if len(wiz.compPickerItems) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(wiz.compPickerItems))
 	}
 }
 
-func TestMultiSelect_IsSelected(t *testing.T) {
-	ms := newTestMS([]string{"a", "b"})
-	ms.selected = []string{"a"}
-	if !ms.isSelected("a") {
-		t.Fatal("expected a to be selected")
-	}
-	if ms.isSelected("b") {
-		t.Fatal("b should not be selected")
+func TestUpdateCompFilter_NoMatch(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.compPickerSearch.SetValue("zzz")
+	wiz.updateCompFilter()
+	if len(wiz.compPickerItems) != 0 {
+		t.Fatalf("expected 0 items, got %d", len(wiz.compPickerItems))
 	}
 }
 
-func TestMultiSelect_Toggle_Adds(t *testing.T) {
-	ms := newTestMS([]string{"a", "b"})
-	ms.toggle("a")
-	if !ms.isSelected("a") {
-		t.Fatal("expected a to be selected after toggle")
+func TestUpdateCompFilter_CaseInsensitive(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.compPickerSearch.SetValue("CHECKOUT")
+	wiz.updateCompFilter()
+	if len(wiz.compPickerItems) == 0 {
+		t.Fatal("expected matches for CHECKOUT (case-insensitive)")
 	}
 }
 
-func TestMultiSelect_Toggle_Removes(t *testing.T) {
-	ms := newTestMS([]string{"a", "b"})
-	ms.selected = []string{"a"}
-	ms.toggle("a")
-	if ms.isSelected("a") {
-		t.Fatal("expected a to be removed after toggle")
+func TestUpdateCompFilter_ClampsIdx(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.compPickerIdx = 5
+	wiz.compPickerSearch.SetValue("checkout")
+	wiz.updateCompFilter()
+	if wiz.compPickerIdx >= len(wiz.compPickerItems) {
+		t.Fatalf("compPickerIdx %d out of bounds (%d items)", wiz.compPickerIdx, len(wiz.compPickerItems))
 	}
 }
 
-func TestMultiSelect_Toggle_PreservesOthers(t *testing.T) {
-	ms := newTestMS([]string{"a", "b", "c"})
-	ms.selected = []string{"a", "b", "c"}
-	ms.toggle("b")
-	if ms.isSelected("b") {
-		t.Fatal("b should be removed")
+func TestIsCompSelected(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.selectedComps = []string{"checkout-backend"}
+	if !wiz.isCompSelected("checkout-backend") {
+		t.Fatal("expected checkout-backend to be selected")
 	}
-	if !ms.isSelected("a") || !ms.isSelected("c") {
-		t.Fatal("a and c should remain selected")
+	if wiz.isCompSelected("user-service") {
+		t.Fatal("user-service should not be selected")
 	}
 }
 
-// ── syncFocus smoke test ──────────────────────────────────────────────────────
-
-func TestSyncFocus_DoesNotPanic(t *testing.T) {
-	ti := textinput.New()
-	wiz := &startWizard{
-		screen:       wizScreenCustom,
-		custField:    custFieldBackends,
-		nameInput:    ti,
-		configInput:  ti,
-		custName:     ti,
-		custMFEInput: ti,
-		backends:     newTestMS([]string{"x"}),
-		bffs:         newTestMS([]string{"y"}),
-	}
-	// Should not panic for any field.
-	for f := 0; f < custNumFields; f++ {
-		wiz.custField = f
-		wiz.syncFocus()
-	}
-	wiz.screen = wizScreenFile
-	for f := 0; f < wizNumFields; f++ {
-		wiz.field = f
-		wiz.syncFocus()
+func TestToggleComp_Adds(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.toggleComp("checkout-backend")
+	if !wiz.isCompSelected("checkout-backend") {
+		t.Fatal("expected checkout-backend selected")
 	}
 }
+
+func TestToggleComp_Removes(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.selectedComps = []string{"checkout-backend"}
+	wiz.toggleComp("checkout-backend")
+	if wiz.isCompSelected("checkout-backend") {
+		t.Fatal("expected checkout-backend removed")
+	}
+}
+
+func TestToggleComp_PreservesOthers(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.selectedComps = []string{"checkout-backend", "user-service"}
+	wiz.toggleComp("checkout-backend")
+	if !wiz.isCompSelected("user-service") {
+		t.Fatal("user-service should remain selected")
+	}
+}
+
+func TestTogglePickerItem_Component(t *testing.T) {
+	wiz := newTestWiz()
+	// Find the index of checkout-backend (should be item[1])
+	idx := -1
+	for i, pi := range wiz.compPickerItems {
+		if !pi.isSystem && pi.comp == "checkout-backend" {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		t.Fatal("checkout-backend not found in picker items")
+	}
+	wiz.togglePickerItem(idx)
+	if !wiz.isCompSelected("checkout-backend") {
+		t.Fatal("expected checkout-backend to be selected")
+	}
+}
+
+func TestTogglePickerItem_System_SelectsAll(t *testing.T) {
+	wiz := newTestWiz()
+	// Find checkout system header (should be item[0])
+	wiz.togglePickerItem(0)
+	if !wiz.isCompSelected("checkout-backend") || !wiz.isCompSelected("checkout-bff") {
+		t.Fatal("expected all checkout components selected")
+	}
+}
+
+func TestTogglePickerItem_System_DeselectsAll(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.selectedComps = []string{"checkout-backend", "checkout-bff"}
+	wiz.togglePickerItem(0) // toggle checkout system header — all already selected → deselect
+	if wiz.isCompSelected("checkout-backend") || wiz.isCompSelected("checkout-bff") {
+		t.Fatal("expected all checkout components deselected")
+	}
+}
+
+func TestTogglePickerItem_System_PartialSelectsRemaining(t *testing.T) {
+	wiz := newTestWiz()
+	wiz.selectedComps = []string{"checkout-backend"} // one already selected
+	wiz.togglePickerItem(0)                           // should select the missing one too
+	if !wiz.isCompSelected("checkout-bff") {
+		t.Fatal("expected checkout-bff to be selected")
+	}
+	if !wiz.isCompSelected("checkout-backend") {
+		t.Fatal("checkout-backend should still be selected")
+	}
+}
+
 
 // ── wrapLine edge cases ───────────────────────────────────────────────────────
 

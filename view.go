@@ -437,7 +437,7 @@ func (m model) renderWizardCustom() string {
 	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
 
 	label := func(text string, field int) string {
-		s := lipgloss.NewStyle().Width(10)
+		s := lipgloss.NewStyle().Width(12)
 		if wiz.custField == field {
 			return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true).Render(text)
 		}
@@ -452,9 +452,83 @@ func (m model) renderWizardCustom() string {
 	lines = append(lines, "  "+label("RAM", custFieldRAM)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.custField == custFieldRAM, hl, sel, dim))
 	lines = append(lines, "")
 
-	lines = append(lines, renderMultiSelect(&wiz.backends, wiz.custField == custFieldBackends, hl, sel, dim)...)
-	lines = append(lines, "")
-	lines = append(lines, renderMultiSelect(&wiz.bffs, wiz.custField == custFieldBFFs, hl, sel, dim)...)
+	// ── Components field ──────────────────────────────────────────────────────
+	compFocused := wiz.custField == custFieldComponents
+	if wiz.compPickerOpen {
+		lines = append(lines, "  "+hl.Render(" Components "))
+		lines = append(lines, "  "+wiz.compPickerSearch.View())
+		const maxVisible = 8
+		start := 0
+		if wiz.compPickerIdx >= maxVisible {
+			start = wiz.compPickerIdx - maxVisible + 1
+		}
+		end := min(len(wiz.compPickerItems), start+maxVisible)
+		if len(wiz.compPickerItems) == 0 {
+			lines = append(lines, "  "+dim.Render("  (no matches)"))
+		} else {
+			for i := start; i < end; i++ {
+				item := wiz.compPickerItems[i]
+				isFocused := i == wiz.compPickerIdx
+				if item.isSystem {
+					// Count selected vs total for this system in the filtered view.
+					total, selected := 0, 0
+					for _, pi := range wiz.compPickerItems {
+						if !pi.isSystem && pi.system == item.system {
+							total++
+							if wiz.isCompSelected(pi.comp) {
+								selected++
+							}
+						}
+					}
+					icon := "○"
+					if total > 0 && selected == total {
+						icon = "✓"
+					} else if selected > 0 {
+						icon = "◐"
+					}
+					text := fmt.Sprintf("%s %s  [%d/%d]", icon, item.system, selected, total)
+					if isFocused {
+						lines = append(lines, "  "+hl.Render(text))
+					} else if selected > 0 {
+						lines = append(lines, "  "+sel.Render(text))
+					} else {
+						lines = append(lines, "  "+dim.Render(text))
+					}
+				} else {
+					isSelected := wiz.isCompSelected(item.comp)
+					check := "○"
+					if isSelected {
+						check = "✓"
+					}
+					text := "  " + check + " " + item.comp
+					switch {
+					case isFocused:
+						lines = append(lines, "  "+hl.Render(text))
+					case isSelected:
+						lines = append(lines, "  "+sel.Render(text))
+					default:
+						lines = append(lines, "  "+dim.Render(text))
+					}
+				}
+			}
+		}
+	} else {
+		// Collapsed: label + selection summary + Add button.
+		var summary string
+		if len(wiz.selectedComps) == 0 {
+			summary = dim.Render("(none)")
+		} else {
+			summary = sel.Render(strings.Join(wiz.selectedComps, ", "))
+		}
+		addBtn := "[ + Add ]"
+		if compFocused {
+			addBtn = hl.Render(" + Add ")
+		} else {
+			addBtn = dim.Render(addBtn)
+		}
+		lines = append(lines, "  "+label("Components", custFieldComponents)+"  "+summary)
+		lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
+	}
 	lines = append(lines, "")
 
 	lines = append(lines, "  "+label("MFE", custFieldMFE)+"  "+wiz.custMFEInput.View())
@@ -479,75 +553,24 @@ func (m model) renderWizardCustom() string {
 	lines = append(lines, "")
 
 	var hintText string
-	switch wiz.custField {
-	case custFieldName:
+	switch {
+	case wiz.compPickerOpen:
+		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Esc close"
+	case wiz.custField == custFieldName:
 		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
-	case custFieldCPU, custFieldRAM:
+	case wiz.custField == custFieldCPU || wiz.custField == custFieldRAM:
 		hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case custFieldBackends, custFieldBFFs:
-		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to filter  ·  Tab next"
-	case custFieldMFE:
+	case wiz.custField == custFieldComponents:
+		hintText = "  Enter open picker  ·  ↑↓ or Tab to move  ·  Esc cancel"
+	case wiz.custField == custFieldMFE:
 		hintText = "  type path  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case custFieldMode:
+	case wiz.custField == custFieldMode:
 		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case custFieldButtons:
+	case wiz.custField == custFieldButtons:
 		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
 	lines = append(lines, hint.Render(hintText))
 	return strings.Join(lines, "\n")
-}
-
-// renderMultiSelect renders a multiSelect field, collapsed when not focused.
-func renderMultiSelect(ms *multiSelect, focused bool, hl, sel, dim lipgloss.Style) []string {
-	info := lipgloss.NewStyle().Foreground(currentTheme.Title)
-	var lines []string
-
-	if !focused {
-		label := info.Width(10).Render(ms.label)
-		var summary string
-		if len(ms.selected) == 0 {
-			summary = dim.Render("(none)")
-		} else {
-			summary = sel.Render(strings.Join(ms.selected, ", "))
-		}
-		lines = append(lines, "  "+label+"  "+summary)
-		return lines
-	}
-
-	// Expanded: label header + search input + filtered list.
-	lines = append(lines, "  "+hl.Render(" "+ms.label+" "))
-	lines = append(lines, "  "+ms.search.View())
-
-	const maxVisible = 6
-	start := 0
-	if ms.listIdx >= maxVisible {
-		start = ms.listIdx - maxVisible + 1
-	}
-	end := min(len(ms.filtered), start+maxVisible)
-
-	if len(ms.filtered) == 0 {
-		lines = append(lines, "  "+dim.Render("  (no matches)"))
-	} else {
-		for i := start; i < end; i++ {
-			item := ms.filtered[i]
-			isSelected := ms.isSelected(item)
-			isFocused := i == ms.listIdx
-			switch {
-			case isSelected && isFocused:
-				lines = append(lines, "  "+hl.Render("✓ "+item))
-			case isSelected:
-				lines = append(lines, "  "+sel.Render("✓ "+item))
-			case isFocused:
-				lines = append(lines, "  "+hl.Render("○ "+item))
-			default:
-				lines = append(lines, "  "+dim.Render("○ "+item))
-			}
-		}
-	}
-	if len(ms.selected) > 0 {
-		lines = append(lines, "  "+dim.Render("  selected: "+strings.Join(ms.selected, ", ")))
-	}
-	return lines
 }
 
 // horizSelector renders a row of options.

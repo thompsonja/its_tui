@@ -120,6 +120,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "esc":
+			// Close component picker before anything else.
+			if m.wizard != nil && m.wizard.compPickerOpen {
+				m.wizard.compPickerOpen = false
+				m.wizard.syncFocus()
+				return m, tea.Batch(cmds...)
+			}
 			if m.flipTarget == 1.0 {
 				m.flipTarget = 0.0
 				return m, tea.Batch(cmds...)
@@ -491,14 +497,19 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 	wiz := m.wizard
 	key := msg.String()
 
+	// Tab/Shift+Tab cycle fields only when the picker is closed.
 	switch key {
 	case "tab":
-		wiz.custField = (wiz.custField + 1) % custNumFields
-		wiz.syncFocus()
+		if !wiz.compPickerOpen {
+			wiz.custField = (wiz.custField + 1) % custNumFields
+			wiz.syncFocus()
+		}
 		return
 	case "shift+tab":
-		wiz.custField = (wiz.custField - 1 + custNumFields) % custNumFields
-		wiz.syncFocus()
+		if !wiz.compPickerOpen {
+			wiz.custField = (wiz.custField - 1 + custNumFields) % custNumFields
+			wiz.syncFocus()
+		}
 		return
 	}
 
@@ -547,64 +558,47 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			wiz.custField = custFieldCPU
 			wiz.syncFocus()
 		case "down", "enter":
-			wiz.custField = custFieldBackends
+			wiz.custField = custFieldComponents
 			wiz.syncFocus()
 		}
 
-	case custFieldBackends:
-		switch key {
-		case "up":
-			if wiz.backends.listIdx > 0 {
-				wiz.backends.listIdx--
-			} else {
+	case custFieldComponents:
+		if wiz.compPickerOpen {
+			switch key {
+			case "up":
+				if wiz.compPickerIdx > 0 {
+					wiz.compPickerIdx--
+				}
+			case "down":
+				if wiz.compPickerIdx < len(wiz.compPickerItems)-1 {
+					wiz.compPickerIdx++
+				}
+			case "enter":
+				wiz.togglePickerItem(wiz.compPickerIdx)
+			default:
+				wiz.compPickerSearch, _ = wiz.compPickerSearch.Update(msg)
+				wiz.updateCompFilter()
+			}
+		} else {
+			switch key {
+			case "up":
 				wiz.custField = custFieldRAM
 				wiz.syncFocus()
-			}
-		case "down":
-			if wiz.backends.listIdx < len(wiz.backends.filtered)-1 {
-				wiz.backends.listIdx++
-			} else {
-				wiz.custField = custFieldBFFs
-				wiz.syncFocus()
-			}
-		case "enter":
-			if len(wiz.backends.filtered) > 0 {
-				wiz.backends.toggle(wiz.backends.filtered[wiz.backends.listIdx])
-			}
-		default:
-			wiz.backends.search, _ = wiz.backends.search.Update(msg)
-			wiz.backends.updateFilter()
-		}
-
-	case custFieldBFFs:
-		switch key {
-		case "up":
-			if wiz.bffs.listIdx > 0 {
-				wiz.bffs.listIdx--
-			} else {
-				wiz.custField = custFieldBackends
-				wiz.syncFocus()
-			}
-		case "down":
-			if wiz.bffs.listIdx < len(wiz.bffs.filtered)-1 {
-				wiz.bffs.listIdx++
-			} else {
+			case "down":
 				wiz.custField = custFieldMFE
 				wiz.syncFocus()
+			case "enter":
+				wiz.compPickerOpen = true
+				wiz.compPickerSearch.SetValue("")
+				wiz.updateCompFilter()
+				wiz.syncFocus()
 			}
-		case "enter":
-			if len(wiz.bffs.filtered) > 0 {
-				wiz.bffs.toggle(wiz.bffs.filtered[wiz.bffs.listIdx])
-			}
-		default:
-			wiz.bffs.search, _ = wiz.bffs.search.Update(msg)
-			wiz.bffs.updateFilter()
 		}
 
 	case custFieldMFE:
 		switch key {
 		case "up":
-			wiz.custField = custFieldBFFs
+			wiz.custField = custFieldComponents
 			wiz.syncFocus()
 		case "down", "enter":
 			wiz.custField = custFieldMode
@@ -690,13 +684,12 @@ func (m *model) executeStartFromCustomWizard() {
 
 	// Write selections to disk.
 	cfg := CustomInstanceConfig{
-		Instance: name,
-		CPU:      cpu,
-		RAM:      ram,
-		Backends: wiz.backends.selected,
-		BFFs:     wiz.bffs.selected,
-		MFE:      mfePath,
-		Mode:     mode,
+		Instance:   name,
+		CPU:        cpu,
+		RAM:        ram,
+		Components: wiz.selectedComps,
+		MFE:        mfePath,
+		Mode:       mode,
 	}
 	sp := m.statePath
 	go func() {
@@ -967,8 +960,7 @@ func (m *model) resizePanels() {
 		m.wizard.nameInput.Width = inputW
 		m.wizard.configInput.Width = inputW
 		m.wizard.custName.Width = inputW
-		m.wizard.backends.search.Width = inputW
-		m.wizard.bffs.search.Width = inputW
+		m.wizard.compPickerSearch.Width = inputW
 		m.wizard.custMFEInput.Width = inputW
 	}
 }
