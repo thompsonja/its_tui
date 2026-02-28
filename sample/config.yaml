@@ -1,0 +1,8 @@
+hello-world:
+  minikube:
+    cpu: 4
+    ram: 4g
+  skaffold:
+    path: sample/skaffold.yaml
+  mfe:
+    path: sample/mfe/package.json

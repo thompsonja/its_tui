@@ -1,0 +1,17 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+metadata:
+  name: hello-world
+
+build:
+  artifacts:
+    - image: hello-world
+      docker:
+        dockerfile: Dockerfile
+      # context is the directory containing this skaffold.yaml
+      context: .
+
+manifests:
+  rawYaml:
+    - k8s/deployment.yaml
+    - k8s/service.yaml

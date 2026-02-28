@@ -43,6 +43,9 @@ func (m model) View() string {
 // Uses fullscreenTarget so the text flips at the moment the key is pressed,
 // not only once the animation completes.
 func (m model) fullscreenHint() string {
+	if m.instance.Name == "" {
+		return ""
+	}
 	var text string
 	if m.fullscreenTarget == 1 {
 		text = "  ctrl+f to exit fullscreen"
@@ -192,22 +195,28 @@ func (m model) renderCommandsPanel(w, h int) string {
 	var titleText string
 	var content string
 
+	spinner := ""
+	if m.runningCmds > 0 {
+		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		spinner = " " + lipgloss.NewStyle().Foreground(currentTheme.Focused).Render(frames[m.spinnerTick%len(frames)])
+	}
+
 	switch {
 	case p <= 0:
 		// Commands fully visible.
-		titleText = " Commands" + hint
+		titleText = " Commands" + spinner + hint
 		content = m.commandsContent(w)
 
 	case p >= 1:
 		// Overlay fully visible.
 		titleText, content = m.renderOverlay(w, innerH)
-		titleText += hint
+		titleText += spinner + hint
 
 	case p < 0.5:
 		// Phase 1: shrink the commands side toward the midpoint.
 		multiplier := 1.0 - 2.0*p
 		shrunkH := max(0, int(float64(innerH)*multiplier))
-		titleText = " Commands" + hint
+		titleText = " Commands" + spinner + hint
 		if shrunkH < 2 {
 			// Too few lines to show sep+input; just blank.
 			content = strings.Repeat("\n", innerH-1)
@@ -225,7 +234,7 @@ func (m model) renderCommandsPanel(w, h int) string {
 		multiplier := 2.0*p - 1.0
 		expandH := max(1, int(float64(innerH)*multiplier))
 		titleText, content = m.renderOverlayExpanding(w, innerH, expandH)
-		titleText += hint
+		titleText += spinner + hint
 	}
 
 	inner := lipgloss.JoinVertical(lipgloss.Left,
@@ -291,61 +300,254 @@ func (m model) renderOverlayExpanding(w, innerH, expandH int) (string, string) {
 // ── Start wizard renderer ─────────────────────────────────────────────────────
 
 func (m model) wizardTitle() string {
+	if m.wizard == nil {
+		return " Start"
+	}
+	switch m.wizard.screen {
+	case wizScreenFile:
+		return " Start › File"
+	case wizScreenCustom:
+		return " Start › Custom"
+	}
 	return " Start"
 }
 
-// renderWizard returns the wizard form as a plain string (not padded to innerH).
-// Layout: two horizontal selectors (CPU, RAM) + a buttons row, navigated with ↑↓/←→.
+// renderWizard dispatches to the appropriate screen renderer.
 func (m model) renderWizard() string {
 	wiz := m.wizard
 	if wiz == nil {
 		return ""
 	}
+	switch wiz.screen {
+	case wizScreenFile:
+		return m.renderWizardFile()
+	case wizScreenCustom:
+		return m.renderWizardCustom()
+	default:
+		return m.renderWizardSelect()
+	}
+}
 
-	// hl = background-highlighted style for the focused label and selected option.
+// renderWizardSelect renders the opening mode-select screen.
+func (m model) renderWizardSelect() string {
+	wiz := m.wizard
+	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
+	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
+	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
+
+	options := []string{"Load from file", "Custom instance"}
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  Choose how to start:")
+	lines = append(lines, "")
+	for i, opt := range options {
+		if i == wiz.screenIdx {
+			lines = append(lines, "  "+sel.Render("● "+opt))
+		} else {
+			lines = append(lines, "  "+dim.Render("○ "+opt))
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, hint.Render("  ↑↓ select  ·  Enter confirm  ·  Esc cancel"))
+	return strings.Join(lines, "\n")
+}
+
+// renderWizardFile renders the file-based wizard (instance name + config path + mode).
+func (m model) renderWizardFile() string {
+	wiz := m.wizard
 	hl   := lipgloss.NewStyle().Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
 	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
 	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
-	info := lipgloss.NewStyle().Foreground(currentTheme.Title)
 	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
 
 	labelStyle := func(field int) lipgloss.Style {
+		s := lipgloss.NewStyle().Width(10)
 		if wiz.field == field {
-			return hl.Padding(0, 1)
+			return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
 		}
-		return info
+		return s.Foreground(currentTheme.Title)
 	}
 
 	var lines []string
 	lines = append(lines, "")
-	lines = append(lines, "  "+labelStyle(0).Render("CPU")+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.field == 0, hl, sel, dim))
+	lines = append(lines, "  "+labelStyle(wizFieldName).Render("Instance")+"  "+wiz.nameInput.View())
 	lines = append(lines, "")
-	lines = append(lines, "  "+labelStyle(1).Render("RAM")+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.field == 1, hl, sel, dim))
+	lines = append(lines, "  "+labelStyle(wizFieldConfig).Render("Config")+"  "+wiz.configInput.View())
+
+	if len(wiz.browseFiles) > 0 {
+		const browseWindow = 5
+		start := max(0, wiz.browseIdx-browseWindow/2)
+		end := min(len(wiz.browseFiles), start+browseWindow)
+		if end-start < browseWindow && start > 0 {
+			start = max(0, end-browseWindow)
+		}
+		configFocused := wiz.field == wizFieldConfig
+		for i := start; i < end; i++ {
+			f := wiz.browseFiles[i]
+			if i == wiz.browseIdx && configFocused {
+				lines = append(lines, "              "+sel.Render("● "+f))
+			} else if i == wiz.browseIdx {
+				lines = append(lines, "              "+dim.Render("● "+f))
+			} else {
+				lines = append(lines, "              "+dim.Render("○ "+f))
+			}
+		}
+	}
+	lines = append(lines, "")
+	lines = append(lines, "  "+labelStyle(wizFieldMode).Render("Mode")+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, hl, sel, dim))
 	lines = append(lines, "")
 	lines = append(lines, "")
 
-	// Buttons row.
+	btnBase := lipgloss.NewStyle().Padding(0, 2)
 	var startS, cancelS lipgloss.Style
-	if wiz.field == 2 {
+	if wiz.field == wizFieldButtons {
 		if wiz.confirmIdx == 0 {
-			startS, cancelS = hl.Padding(0, 1), dim
+			startS, cancelS = hl.Padding(0, 2), btnBase.Foreground(currentTheme.Muted)
 		} else {
-			startS, cancelS = dim, hl.Padding(0, 1)
+			startS, cancelS = btnBase.Foreground(currentTheme.Muted), hl.Padding(0, 2)
 		}
 	} else {
-		startS, cancelS = info, dim
+		startS = btnBase.Foreground(currentTheme.Title)
+		cancelS = btnBase.Foreground(currentTheme.Muted)
 	}
-	lines = append(lines, "  "+startS.Render("Start")+"   "+cancelS.Render("Cancel"))
+	lines = append(lines, "  "+startS.Render("Start")+"  "+cancelS.Render("Cancel"))
 	lines = append(lines, "")
 
-	hintText := "  ↑↓ fields  ·  ←→ select"
-	if wiz.field == 2 {
-		hintText += "  ·  Enter confirm"
+	var hintText string
+	switch wiz.field {
+	case wizFieldName:
+		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
+	case wizFieldConfig:
+		hintText = "  ↑↓ browse files  ·  Enter confirm  ·  Tab next  ·  Esc cancel"
+	case wizFieldMode:
+		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
+	case wizFieldButtons:
+		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
-	hintText += "  ·  Esc cancel"
 	lines = append(lines, hint.Render(hintText))
-
 	return strings.Join(lines, "\n")
+}
+
+// renderWizardCustom renders the custom-instance wizard.
+func (m model) renderWizardCustom() string {
+	wiz := m.wizard
+	hl   := lipgloss.NewStyle().Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
+	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
+	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
+	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
+
+	label := func(text string, field int) string {
+		s := lipgloss.NewStyle().Width(10)
+		if wiz.custField == field {
+			return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true).Render(text)
+		}
+		return s.Foreground(currentTheme.Title).Render(text)
+	}
+
+	var lines []string
+	lines = append(lines, "")
+	lines = append(lines, "  "+label("Instance", custFieldName)+"  "+wiz.custName.View())
+	lines = append(lines, "")
+	lines = append(lines, "  "+label("CPU", custFieldCPU)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.custField == custFieldCPU, hl, sel, dim))
+	lines = append(lines, "  "+label("RAM", custFieldRAM)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.custField == custFieldRAM, hl, sel, dim))
+	lines = append(lines, "")
+
+	lines = append(lines, renderMultiSelect(&wiz.backends, wiz.custField == custFieldBackends, hl, sel, dim)...)
+	lines = append(lines, "")
+	lines = append(lines, renderMultiSelect(&wiz.bffs, wiz.custField == custFieldBFFs, hl, sel, dim)...)
+	lines = append(lines, "")
+
+	lines = append(lines, "  "+label("MFE", custFieldMFE)+"  "+wiz.custMFEInput.View())
+	lines = append(lines, "")
+	lines = append(lines, "  "+label("Mode", custFieldMode)+"  "+horizSelector(wiz.custModeIdx, skaffoldModes, wiz.custField == custFieldMode, hl, sel, dim))
+	lines = append(lines, "")
+	lines = append(lines, "")
+
+	btnBase := lipgloss.NewStyle().Padding(0, 2)
+	var startS, cancelS lipgloss.Style
+	if wiz.custField == custFieldButtons {
+		if wiz.custConfirmIdx == 0 {
+			startS, cancelS = hl.Padding(0, 2), btnBase.Foreground(currentTheme.Muted)
+		} else {
+			startS, cancelS = btnBase.Foreground(currentTheme.Muted), hl.Padding(0, 2)
+		}
+	} else {
+		startS = btnBase.Foreground(currentTheme.Title)
+		cancelS = btnBase.Foreground(currentTheme.Muted)
+	}
+	lines = append(lines, "  "+startS.Render("Start")+"  "+cancelS.Render("Cancel"))
+	lines = append(lines, "")
+
+	var hintText string
+	switch wiz.custField {
+	case custFieldName:
+		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
+	case custFieldCPU, custFieldRAM:
+		hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
+	case custFieldBackends, custFieldBFFs:
+		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to filter  ·  Tab next"
+	case custFieldMFE:
+		hintText = "  type path  ·  ↑↓ or Tab to move  ·  Esc cancel"
+	case custFieldMode:
+		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
+	case custFieldButtons:
+		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
+	}
+	lines = append(lines, hint.Render(hintText))
+	return strings.Join(lines, "\n")
+}
+
+// renderMultiSelect renders a multiSelect field, collapsed when not focused.
+func renderMultiSelect(ms *multiSelect, focused bool, hl, sel, dim lipgloss.Style) []string {
+	info := lipgloss.NewStyle().Foreground(currentTheme.Title)
+	var lines []string
+
+	if !focused {
+		label := info.Width(10).Render(ms.label)
+		var summary string
+		if len(ms.selected) == 0 {
+			summary = dim.Render("(none)")
+		} else {
+			summary = sel.Render(strings.Join(ms.selected, ", "))
+		}
+		lines = append(lines, "  "+label+"  "+summary)
+		return lines
+	}
+
+	// Expanded: label header + search input + filtered list.
+	lines = append(lines, "  "+hl.Render(" "+ms.label+" "))
+	lines = append(lines, "  "+ms.search.View())
+
+	const maxVisible = 6
+	start := 0
+	if ms.listIdx >= maxVisible {
+		start = ms.listIdx - maxVisible + 1
+	}
+	end := min(len(ms.filtered), start+maxVisible)
+
+	if len(ms.filtered) == 0 {
+		lines = append(lines, "  "+dim.Render("  (no matches)"))
+	} else {
+		for i := start; i < end; i++ {
+			item := ms.filtered[i]
+			isSelected := ms.isSelected(item)
+			isFocused := i == ms.listIdx
+			switch {
+			case isSelected && isFocused:
+				lines = append(lines, "  "+hl.Render("✓ "+item))
+			case isSelected:
+				lines = append(lines, "  "+sel.Render("✓ "+item))
+			case isFocused:
+				lines = append(lines, "  "+hl.Render("○ "+item))
+			default:
+				lines = append(lines, "  "+dim.Render("○ "+item))
+			}
+		}
+	}
+	if len(ms.selected) > 0 {
+		lines = append(lines, "  "+dim.Render("  selected: "+strings.Join(ms.selected, ", ")))
+	}
+	return lines
 }
 
 // horizSelector renders a row of options.
@@ -385,11 +587,14 @@ func helpContent(width int) string {
 	})
 	cmds := helpSection("Commands", []helpEntry{
 		{"help", "show this help"},
-		{"start", "configure and start instance"},
+		{"list", "list configured instances"},
+		{"use <name>", "switch to instance"},
+		{"start", "start current instance"},
+		{"stop", "stop instance + delete cluster"},
 		{"theme [name]", "set color theme"},
 		{"", ""},
 		{"Enter", "run command"},
-		{"Esc", "close help"},
+		{"Esc", "close overlay"},
 	})
 	global := helpSection("Global", []helpEntry{
 		{"Ctrl+C", "quit"},

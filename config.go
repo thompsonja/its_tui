@@ -1,0 +1,248 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// ── YAML config ───────────────────────────────────────────────────────────────
+
+// Configs maps instance name → InstanceConfig (the top-level YAML keys).
+type Configs map[string]InstanceConfig
+
+// InstanceConfig holds the per-instance configuration from the YAML file.
+type InstanceConfig struct {
+	Minikube MinikubeConfig `yaml:"minikube"`
+	Skaffold SkaffoldConfig `yaml:"skaffold"`
+	MFE      MFEConfig      `yaml:"mfe"`
+}
+
+// MinikubeConfig holds minikube start parameters.
+type MinikubeConfig struct {
+	CPU int    `yaml:"cpu"` // number of vCPUs
+	RAM string `yaml:"ram"` // memory passed to --memory, e.g. "4Gi" or "4096"
+}
+
+// SkaffoldConfig holds the skaffold pipeline configuration.
+type SkaffoldConfig struct {
+	Path string `yaml:"path"` // path to skaffold.yaml
+}
+
+// MFEConfig holds the micro-frontend configuration.
+type MFEConfig struct {
+	Path string `yaml:"path"` // path to package.json
+}
+
+// validName matches instance names: alphanumeric, hyphens, underscores.
+var validName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// LoadConfigs parses the YAML file at path.
+// A missing file returns an empty Configs (not an error) so the TUI starts without one.
+func LoadConfigs(path string) (Configs, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return Configs{}, nil
+		}
+		return nil, fmt.Errorf("reading config %s: %w", path, err)
+	}
+	var cfg Configs
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config %s: %w", path, err)
+	}
+	if cfg == nil {
+		cfg = Configs{}
+	}
+	for name := range cfg {
+		if !validName.MatchString(name) {
+			return nil, fmt.Errorf("config: instance name %q must be alphanumeric/hyphen/underscore", name)
+		}
+	}
+	return cfg, nil
+}
+
+// ── JSON state ────────────────────────────────────────────────────────────────
+
+// State tracks which instances have been started.
+type State struct {
+	Instances       map[string]ActiveInstance `json:"instances"`
+	CurrentInstance string                    `json:"current_instance,omitempty"`
+	CommandHistory  []string                  `json:"command_history,omitempty"`
+	Theme           string                    `json:"theme,omitempty"`
+}
+
+const maxHistoryLen = 10
+
+// AppendCommandHistory adds line to the persisted command history, keeping the
+// last maxHistoryLen entries.
+func AppendCommandHistory(statePath, line string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.CommandHistory = append(s.CommandHistory, line)
+	if len(s.CommandHistory) > maxHistoryLen {
+		s.CommandHistory = s.CommandHistory[len(s.CommandHistory)-maxHistoryLen:]
+	}
+	return SaveState(statePath, s)
+}
+
+// ActiveInstance records when an instance was last started.
+type ActiveInstance struct {
+	StartedAt string `json:"started_at"`
+}
+
+// LoadState reads the state JSON file.
+// A missing file returns an empty State (not an error).
+func LoadState(path string) (State, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return State{Instances: map[string]ActiveInstance{}}, nil
+		}
+		return State{}, fmt.Errorf("reading state %s: %w", path, err)
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return State{}, fmt.Errorf("parsing state %s: %w", path, err)
+	}
+	if s.Instances == nil {
+		s.Instances = map[string]ActiveInstance{}
+	}
+	return s, nil
+}
+
+// SaveState atomically writes the state JSON file, creating parent dirs as needed.
+func SaveState(path string, s State) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating state dir: %w", err)
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	// Write atomically via a temp file + rename.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// MarkActive records instanceName as active in the state file.
+func MarkActive(statePath, instanceName string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.Instances[instanceName] = ActiveInstance{
+		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	return SaveState(statePath, s)
+}
+
+// MarkInactive removes instanceName from the active instances in the state file.
+func MarkInactive(statePath, instanceName string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	delete(s.Instances, instanceName)
+	return SaveState(statePath, s)
+}
+
+// SaveTheme persists the chosen theme name to the state file.
+func SaveTheme(statePath, themeName string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.Theme = themeName
+	return SaveState(statePath, s)
+}
+
+// SetCurrentInstance persists the currently-selected instance to the state file.
+func SetCurrentInstance(statePath, instanceName string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.CurrentInstance = instanceName
+	return SaveState(statePath, s)
+}
+
+// ── Custom instance config ────────────────────────────────────────────────────
+
+// CustomInstanceConfig holds the selections made in the custom-instance wizard.
+type CustomInstanceConfig struct {
+	Instance string   `json:"instance"`
+	CPU      string   `json:"cpu"`
+	RAM      string   `json:"ram"`
+	Backends []string `json:"backends"`
+	BFFs     []string `json:"bffs"`
+	MFE      string   `json:"mfe,omitempty"`
+	Mode     string   `json:"mode"`
+}
+
+// WriteCustomConfig saves selections alongside the state file as
+// <stateDir>/<instanceName>_selections.json.
+func WriteCustomConfig(statePath, instanceName string, cfg CustomInstanceConfig) error {
+	dir := filepath.Dir(statePath)
+	path := filepath.Join(dir, instanceName+"_selections.json")
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// loadOptions reads a plain-text file of options, one per line.
+// A missing file returns nil (not an error).
+func loadOptions(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var opts []string
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			opts = append(opts, line)
+		}
+	}
+	return opts
+}
+
+// ── Path helpers ──────────────────────────────────────────────────────────────
+
+func tuiDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".tui")
+}
+
+// DefaultConfigPath returns the first config.yaml found: local then ~/.tui/.
+func DefaultConfigPath() string {
+	if _, err := os.Stat("config.yaml"); err == nil {
+		return "config.yaml"
+	}
+	return filepath.Join(tuiDir(), "config.yaml")
+}
+
+// DefaultStatePath returns ~/.tui/state.json.
+func DefaultStatePath() string {
+	return filepath.Join(tuiDir(), "state.json")
+}
+
+// skaffoldLogPath returns the per-instance log file written by skaffold dev.
+func skaffoldLogPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+	return fmt.Sprintf("/tmp/skaffold_%s.log", instanceName)
+}

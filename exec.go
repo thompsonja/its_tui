@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,10 +15,9 @@ import (
 
 // ── kubectl watcher ───────────────────────────────────────────────────────────
 
-// watchKubectl polls `kubectl get pods -A` every 5 s and replaces the minikube
-// panel content with the current output. If no instance is selected the panel
-// shows a single status line instead.
-func watchKubectl(instanceName string) {
+// watchKubectl polls `kubectl get pods` every 5 s and replaces the Minikube
+// panel content. Cancelled via ctx when the instance switches.
+func watchKubectl(ctx context.Context, instanceName string) {
 	if instanceName == "" {
 		prog.Send(minikubeSetMsg{"No instance selected"})
 		return
@@ -24,13 +25,18 @@ func watchKubectl(instanceName string) {
 	runKubectlGetPods() // immediate first run
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		runKubectlGetPods()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			runKubectlGetPods()
+		}
 	}
 }
 
 func runKubectlGetPods() {
-	out, err := exec.Command("kubectl", "get", "pods", "-A").CombinedOutput()
+	out, err := exec.Command("kubectl", "get", "pods").CombinedOutput()
 	lines := splitLines(string(out))
 	if err != nil && len(lines) == 0 {
 		lines = []string{fmt.Sprintf("error: %v", err)}
@@ -40,65 +46,110 @@ func runKubectlGetPods() {
 
 // ── Skaffold log watcher ──────────────────────────────────────────────────────
 
-// watchSkaffoldLog tails path and streams each new line to the skaffold panel.
-//
-//   - If instanceName is empty the panel shows "No instance selected" and returns.
-//   - If the file doesn't exist yet, a "not found" notice is shown first; tail -F
-//     then waits for the file to be created before streaming begins.
-//   - tail -F follows the file by name, surviving log rotation and recreation.
-//   - -n 0 starts from the current end of the file so the TUI never reads the
-//     entire existing log into memory — only new lines are ingested.
-//
-// Memory is further bounded by maxBufLines in the skaffold buffer: once that
-// cap is hit, old lines are evicted from the front of the slice. The viewport
-// holds exactly the buffered lines and renders a scrollable window into them,
-// so scrollback depth == maxBufLines, not the full file.
-//
-// Run as: go watchSkaffoldLog("/tmp/skaffold.log", instance.Name)
-func watchSkaffoldLog(path, instanceName string) {
+// watchSkaffoldLog tails path and streams new lines to the Skaffold panel.
+// Cancelled via ctx when the instance switches.
+func watchSkaffoldLog(ctx context.Context, path, instanceName string) {
 	if instanceName == "" {
 		prog.Send(skaffoldLineMsg("No instance selected"))
 		return
 	}
 	if _, err := os.Stat(path); err != nil {
-		prog.Send(skaffoldLineMsg(fmt.Sprintf("Skaffold log `%s` not found", path)))
+		prog.Send(skaffoldLineMsg(fmt.Sprintf("Skaffold log `%s` not found (run 'start' to create it)", path)))
 	}
-	// tail -F waits for the file to appear if it doesn't exist yet.
-	// Filter out tail's own diagnostic lines so they don't clutter the panel.
-	streamToPanel(func(line string) tea.Msg {
+	cmd := exec.CommandContext(ctx, "tail", "-F", "-n", "0", path)
+	streamCmd(ctx, cmd, func(line string) tea.Msg {
 		if strings.HasPrefix(line, "tail: ") {
-			return nil
+			return nil // filter tail's own diagnostics
 		}
 		return skaffoldLineMsg(line)
-	}, "tail", "-F", "-n", "0", path)
+	})
 }
 
-// ── Core streaming primitive ─────────────────────────────────────────────────
+// ── Skaffold dev runner ───────────────────────────────────────────────────────
 
-// streamToPanel runs name+args as a subprocess. Each line from stdout/stderr
-// is converted via factory and sent to the bubbletea program. Blocks until
-// the process exits — call in a goroutine.
-func streamToPanel(factory func(string) tea.Msg, name string, args ...string) {
-	cmd := exec.Command(name, args...)
+// startSkaffoldToLog runs `skaffold dev` and writes all output to the
+// per-instance log file. watchSkaffoldLog then tails that file into the panel.
+// Uses instanceCtx so it is cancelled when the instance switches.
+func startSkaffoldToLog(instanceName, skaffoldPath, mode string) {
+	if mode == "" {
+		mode = "dev"
+	}
+	logPath := skaffoldLogPath(instanceName)
+	lf, err := os.Create(logPath)
+	if err != nil {
+		prog.Send(commandLineMsg(fmt.Sprintf("skaffold log create error: %v", err)))
+		return
+	}
+	defer lf.Close()
 
+	absPath, err := filepath.Abs(skaffoldPath)
+	if err != nil {
+		absPath = skaffoldPath
+	}
+	cmd := exec.CommandContext(instanceCtx, "skaffold", mode, "--filename", absPath)
+	cmd.Dir = filepath.Dir(absPath)
+	cmd.Stdout = lf
+	cmd.Stderr = lf
+	if err := cmd.Start(); err != nil {
+		prog.Send(commandLineMsg(fmt.Sprintf("skaffold start error: %v", err)))
+		return
+	}
+	if err := cmd.Wait(); err != nil {
+		if instanceCtx.Err() != nil {
+			return // cancelled by instance switch — suppress the exit message
+		}
+		prog.Send(commandLineMsg(fmt.Sprintf("[skaffold exited: %v]", err)))
+	} else {
+		prog.Send(commandLineMsg("[skaffold exited cleanly]"))
+	}
+}
+
+// ── MFE runner ────────────────────────────────────────────────────────────────
+
+// startMFE runs `npm start` from the package.json directory, streaming output
+// to the MFE panel. Uses instanceCtx so it is cancelled when the instance switches.
+func startMFE(packageJSONPath string) {
+	dir := filepath.Dir(packageJSONPath)
+	cmd := exec.CommandContext(instanceCtx, "npm", "start")
+	cmd.Dir = dir
+	streamCmd(instanceCtx, cmd, func(s string) tea.Msg {
+		return mfeLineMsg(s)
+	})
+}
+
+// ── Core streaming primitive ──────────────────────────────────────────────────
+
+// streamToPanel builds a command from name+args and streams it via streamCmd.
+func streamToPanel(ctx context.Context, factory func(string) tea.Msg, name string, args ...string) {
+	streamCmd(ctx, exec.CommandContext(ctx, name, args...), factory)
+}
+
+// streamCmd drains stdout and stderr from cmd, sending each line through factory.
+// A nil return from factory means "skip this line".
+// Suppresses the exit message when the context was cancelled (e.g. instance switch).
+func streamCmd(ctx context.Context, cmd *exec.Cmd, factory func(string) tea.Msg) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		prog.Send(factory(fmt.Sprintf("stdout pipe error: %v", err)))
+		if msg := factory(fmt.Sprintf("stdout pipe error: %v", err)); msg != nil {
+			prog.Send(msg)
+		}
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		prog.Send(factory(fmt.Sprintf("stderr pipe error: %v", err)))
+		if msg := factory(fmt.Sprintf("stderr pipe error: %v", err)); msg != nil {
+			prog.Send(msg)
+		}
 		return
 	}
-
 	if err := cmd.Start(); err != nil {
-		prog.Send(factory(fmt.Sprintf("start error: %v", err)))
+		if msg := factory(fmt.Sprintf("start error: %v", err)); msg != nil {
+			prog.Send(msg)
+		}
 		return
 	}
 
-	// drain stdout in a separate goroutine; drain stderr in this one.
-	// A nil return from factory means "skip this line".
+	// Drain stdout in a separate goroutine; drain stderr here.
 	go func() {
 		s := bufio.NewScanner(stdout)
 		for s.Scan() {
@@ -116,13 +167,20 @@ func streamToPanel(factory func(string) tea.Msg, name string, args ...string) {
 	}
 
 	if err := cmd.Wait(); err != nil {
-		prog.Send(factory(fmt.Sprintf("[exited: %v]", err)))
+		if ctx.Err() != nil {
+			return // killed by context cancellation — don't report
+		}
+		if msg := factory(fmt.Sprintf("[exited: %v]", err)); msg != nil {
+			prog.Send(msg)
+		}
 	} else {
-		prog.Send(factory("[process exited cleanly]"))
+		if msg := factory("[process exited cleanly]"); msg != nil {
+			prog.Send(msg)
+		}
 	}
 }
 
-// splitLines splits a string into lines using a scanner (handles \r\n too).
+// splitLines splits s into lines using a scanner (handles \r\n too).
 func splitLines(s string) []string {
 	var lines []string
 	sc := bufio.NewScanner(strings.NewReader(s))

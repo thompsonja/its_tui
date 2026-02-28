@@ -1,0 +1,10 @@
+auth-service
+user-service
+product-service
+inventory-service
+payment-service
+notification-service
+search-service
+order-service
+analytics-service
+recommendation-service
