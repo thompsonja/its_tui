@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -42,6 +43,58 @@ func runKubectlGetPods() {
 		lines = []string{"Waiting for cluster to be ready..."}
 	}
 	prog.Send(minikubeSetMsg(lines))
+}
+
+// kubectlGetPodsOnce runs kubectl get pods once and returns (lines, true) on
+// success, or (nil, false) if the command fails. Used for the auto-switch trigger.
+func kubectlGetPodsOnce() ([]string, bool) {
+	out, err := exec.Command("kubectl", "get", "pods").CombinedOutput()
+	if err != nil {
+		return nil, false
+	}
+	return splitLines(string(out)), true
+}
+
+// ── Minikube log watcher + runner ─────────────────────────────────────────────
+
+// watchMinikubeLog tails path and streams new lines to the Minikube log panel.
+// Cancelled via ctx when the instance switches.
+func watchMinikubeLog(ctx context.Context, path, instanceName string) {
+	if instanceName == "" {
+		prog.Send(minikubeLineMsg("No instance selected"))
+		return
+	}
+	prog.Send(minikubeLineMsg("Waiting for minikube log..."))
+	cmd := exec.CommandContext(ctx, "tail", "-F", "-n", "50", path)
+	streamCmd(ctx, cmd, func(line string) tea.Msg {
+		if strings.HasPrefix(line, "tail: ") {
+			return nil // filter tail's own diagnostics
+		}
+		return minikubeLineMsg(line)
+	})
+}
+
+// startMinikubeToLog runs `minikube start` and writes all output to the
+// per-instance log file. Blocks until the command exits; returns a non-nil
+// error if minikube failed (context cancellation is not reported as an error).
+func startMinikubeToLog(instanceName, cpu, ram string) error {
+	logPath := minikubeLogPath(instanceName)
+	lf, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("log create: %w", err)
+	}
+	defer lf.Close()
+
+	cmd := exec.CommandContext(instanceCtx, "minikube", "start", "--cpus", cpu, "--memory", ram)
+	cmd.Stdout = lf
+	cmd.Stderr = lf
+	if err := cmd.Run(); err != nil {
+		if instanceCtx.Err() != nil {
+			return nil // cancelled by instance switch — not a real error
+		}
+		return err
+	}
+	return nil
 }
 
 // ── Skaffold log watcher ──────────────────────────────────────────────────────
@@ -106,13 +159,57 @@ func startSkaffoldToLog(instanceName, skaffoldPath, mode string) {
 
 // startMFE runs `npm start` from the package.json directory, streaming output
 // to the MFE panel. Uses instanceCtx so it is cancelled when the instance switches.
+//
+// npm spawns child node processes that survive a simple Process.Kill(), so we
+// place the process in its own process group and send SIGTERM to the entire
+// group on cancellation, killing all descendants.
 func startMFE(packageJSONPath string) {
 	dir := filepath.Dir(packageJSONPath)
-	cmd := exec.CommandContext(instanceCtx, "npm", "start")
+	cmd := exec.Command("npm", "start")
 	cmd.Dir = dir
-	streamCmd(instanceCtx, cmd, func(s string) tea.Msg {
-		return mfeLineMsg(s)
-	})
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		prog.Send(mfeLineMsg(fmt.Sprintf("mfe pipe error: %v", err)))
+		return
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		prog.Send(mfeLineMsg(fmt.Sprintf("mfe pipe error: %v", err)))
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		prog.Send(mfeLineMsg(fmt.Sprintf("mfe start error: %v", err)))
+		return
+	}
+
+	ctx := instanceCtx
+	// Kill the entire process group when the instance context is cancelled.
+	go func() {
+		<-ctx.Done()
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+	}()
+
+	go func() {
+		s := bufio.NewScanner(stdout)
+		for s.Scan() {
+			prog.Send(mfeLineMsg(s.Text()))
+		}
+	}()
+	s := bufio.NewScanner(stderr)
+	for s.Scan() {
+		prog.Send(mfeLineMsg(s.Text()))
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if ctx.Err() != nil {
+			return // killed by instance switch — suppress the exit message
+		}
+		prog.Send(mfeLineMsg(fmt.Sprintf("[mfe exited: %v]", err)))
+	} else {
+		prog.Send(mfeLineMsg("[mfe exited cleanly]"))
+	}
 }
 
 // ── Core streaming primitive ──────────────────────────────────────────────────

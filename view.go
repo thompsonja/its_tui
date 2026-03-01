@@ -28,7 +28,7 @@ func (m model) View() string {
 	rowB := grid - rowT
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderScrollPanel(panelMinikube, " Minikube / kubectl", m.minikubeVP.View(), colL, rowT),
+		m.renderScrollPanel(panelMinikube, m.minikubeTitle(m.focused == panelMinikube), m.minikubeVP.View(), colL, rowT),
 		m.renderScrollPanel(panelSkaffold, " Skaffold", m.skaffoldVP.View(), colR, rowT),
 	)
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top,
@@ -95,7 +95,7 @@ func (m model) renderFullscreenTransition() string {
 	case panelMinikube:
 		m.minikubeVP.Width = max(1, w-border)
 		m.minikubeVP.Height = max(1, h-border-titleH)
-		panel = m.renderScrollPanel(panelMinikube, " Minikube / kubectl", m.minikubeVP.View(), w, h)
+		panel = m.renderScrollPanel(panelMinikube, m.minikubeTitle(true), m.minikubeVP.View(), w, h)
 	case panelSkaffold:
 		m.skaffoldVP.Width = max(1, w-border)
 		m.skaffoldVP.Height = max(1, h-border-titleH)
@@ -143,7 +143,7 @@ func (m model) renderFullscreen() string {
 	grid := m.height - 1
 	switch m.focused {
 	case panelMinikube:
-		return m.renderScrollPanel(panelMinikube, " Minikube / kubectl", m.minikubeVP.View(), w, grid)
+		return m.renderScrollPanel(panelMinikube, m.minikubeTitle(true), m.minikubeVP.View(), w, grid)
 	case panelSkaffold:
 		return m.renderScrollPanel(panelSkaffold, " Skaffold", m.skaffoldVP.View(), w, grid)
 	case panelMFE:
@@ -151,6 +151,25 @@ func (m model) renderFullscreen() string {
 	default: // panelCommands
 		return m.renderCommandsPanel(w, grid)
 	}
+}
+
+// minikubeTitle returns the minikube panel title as two tab segments.
+// The active tab is highlighted with the Focused color; the inactive one is dim.
+// When focused, a dim tooltip hints at the t key.
+func (m model) minikubeTitle(focused bool) string {
+	active := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(currentTheme.Muted)
+	sep := dim.Render(" / ")
+	var title string
+	if m.minikubeShowLog {
+		title = " " + active.Render("Minikube") + sep + dim.Render("kubectl")
+	} else {
+		title = " " + dim.Render("Minikube") + sep + active.Render("kubectl")
+	}
+	if focused {
+		title += dim.Render("  ·  t to toggle")
+	}
+	return title
 }
 
 func (m model) renderTopBar() string {
@@ -299,6 +318,49 @@ func (m model) renderOverlayExpanding(w, innerH, expandH int) (string, string) {
 
 // ── Start wizard renderer ─────────────────────────────────────────────────────
 
+// wizStyles holds the four lipgloss styles used across all wizard screens.
+type wizStyles struct {
+	hl   lipgloss.Style // highlighted/active item (background fill)
+	sel  lipgloss.Style // selected but not active (accent foreground)
+	dim  lipgloss.Style // inactive item
+	hint lipgloss.Style // bottom hint line
+}
+
+func currentWizStyles() wizStyles {
+	return wizStyles{
+		hl:   lipgloss.NewStyle().Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true),
+		sel:  lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true),
+		dim:  lipgloss.NewStyle().Foreground(currentTheme.Muted),
+		hint: lipgloss.NewStyle().Foreground(currentTheme.Help),
+	}
+}
+
+// wizLabel renders a fixed-width label, highlighted when activeField == thisField.
+func wizLabel(text string, activeField, thisField, labelW int) string {
+	s := lipgloss.NewStyle().Width(labelW)
+	if activeField == thisField {
+		return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true).Render(text)
+	}
+	return s.Foreground(currentTheme.Title).Render(text)
+}
+
+// wizardButtons renders the Start / Cancel button row.
+func wizardButtons(focused bool, idx int, hl lipgloss.Style) string {
+	btn := lipgloss.NewStyle().Padding(0, 2)
+	var startS, cancelS lipgloss.Style
+	if focused {
+		if idx == 0 {
+			startS, cancelS = hl.Padding(0, 2), btn.Foreground(currentTheme.Muted)
+		} else {
+			startS, cancelS = btn.Foreground(currentTheme.Muted), hl.Padding(0, 2)
+		}
+	} else {
+		startS = btn.Foreground(currentTheme.Title)
+		cancelS = btn.Foreground(currentTheme.Muted)
+	}
+	return "  " + startS.Render("Start") + "  " + cancelS.Render("Cancel")
+}
+
 func (m model) wizardTitle() string {
 	if m.wizard == nil {
 		return " Start"
@@ -331,9 +393,7 @@ func (m model) renderWizard() string {
 // renderWizardSelect renders the opening mode-select screen.
 func (m model) renderWizardSelect() string {
 	wiz := m.wizard
-	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
-	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
-	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
+	ws := currentWizStyles()
 
 	options := []string{"Load from file", "Custom instance"}
 	var lines []string
@@ -342,37 +402,26 @@ func (m model) renderWizardSelect() string {
 	lines = append(lines, "")
 	for i, opt := range options {
 		if i == wiz.screenIdx {
-			lines = append(lines, "  "+sel.Render("● "+opt))
+			lines = append(lines, "  "+ws.sel.Render("● "+opt))
 		} else {
-			lines = append(lines, "  "+dim.Render("○ "+opt))
+			lines = append(lines, "  "+ws.dim.Render("○ "+opt))
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, hint.Render("  ↑↓ select  ·  Enter confirm  ·  Esc cancel"))
+	lines = append(lines, ws.hint.Render("  ↑↓ select  ·  Enter confirm  ·  Esc cancel"))
 	return strings.Join(lines, "\n")
 }
 
 // renderWizardFile renders the file-based wizard (instance name + config path + mode).
 func (m model) renderWizardFile() string {
 	wiz := m.wizard
-	hl   := lipgloss.NewStyle().Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
-	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
-	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
-	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
-
-	labelStyle := func(field int) lipgloss.Style {
-		s := lipgloss.NewStyle().Width(10)
-		if wiz.field == field {
-			return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
-		}
-		return s.Foreground(currentTheme.Title)
-	}
+	ws := currentWizStyles()
 
 	var lines []string
 	lines = append(lines, "")
-	lines = append(lines, "  "+labelStyle(wizFieldName).Render("Instance")+"  "+wiz.nameInput.View())
+	lines = append(lines, "  "+wizLabel("Instance", wiz.field, wizFieldName, 10)+"  "+wiz.nameInput.View())
 	lines = append(lines, "")
-	lines = append(lines, "  "+labelStyle(wizFieldConfig).Render("Config")+"  "+wiz.configInput.View())
+	lines = append(lines, "  "+wizLabel("Config", wiz.field, wizFieldConfig, 10)+"  "+wiz.configInput.View())
 
 	if len(wiz.browseFiles) > 0 {
 		const browseWindow = 5
@@ -385,32 +434,19 @@ func (m model) renderWizardFile() string {
 		for i := start; i < end; i++ {
 			f := wiz.browseFiles[i]
 			if i == wiz.browseIdx && configFocused {
-				lines = append(lines, "              "+sel.Render("● "+f))
+				lines = append(lines, "              "+ws.sel.Render("● "+f))
 			} else if i == wiz.browseIdx {
-				lines = append(lines, "              "+dim.Render("● "+f))
+				lines = append(lines, "              "+ws.dim.Render("● "+f))
 			} else {
-				lines = append(lines, "              "+dim.Render("○ "+f))
+				lines = append(lines, "              "+ws.dim.Render("○ "+f))
 			}
 		}
 	}
 	lines = append(lines, "")
-	lines = append(lines, "  "+labelStyle(wizFieldMode).Render("Mode")+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, hl, sel, dim))
+	lines = append(lines, "  "+wizLabel("Mode", wiz.field, wizFieldMode, 10)+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 	lines = append(lines, "")
-
-	btnBase := lipgloss.NewStyle().Padding(0, 2)
-	var startS, cancelS lipgloss.Style
-	if wiz.field == wizFieldButtons {
-		if wiz.confirmIdx == 0 {
-			startS, cancelS = hl.Padding(0, 2), btnBase.Foreground(currentTheme.Muted)
-		} else {
-			startS, cancelS = btnBase.Foreground(currentTheme.Muted), hl.Padding(0, 2)
-		}
-	} else {
-		startS = btnBase.Foreground(currentTheme.Title)
-		cancelS = btnBase.Foreground(currentTheme.Muted)
-	}
-	lines = append(lines, "  "+startS.Render("Start")+"  "+cancelS.Render("Cancel"))
+	lines = append(lines, wizardButtons(wiz.field == wizFieldButtons, wiz.confirmIdx, ws.hl))
 	lines = append(lines, "")
 
 	var hintText string
@@ -424,38 +460,27 @@ func (m model) renderWizardFile() string {
 	case wizFieldButtons:
 		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
-	lines = append(lines, hint.Render(hintText))
+	lines = append(lines, ws.hint.Render(hintText))
 	return strings.Join(lines, "\n")
 }
 
 // renderWizardCustom renders the custom-instance wizard.
 func (m model) renderWizardCustom() string {
 	wiz := m.wizard
-	hl   := lipgloss.NewStyle().Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true)
-	sel  := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
-	dim  := lipgloss.NewStyle().Foreground(currentTheme.Muted)
-	hint := lipgloss.NewStyle().Foreground(currentTheme.Help)
-
-	label := func(text string, field int) string {
-		s := lipgloss.NewStyle().Width(12)
-		if wiz.custField == field {
-			return s.Background(currentTheme.Focused).Foreground(currentTheme.HighlightText).Bold(true).Render(text)
-		}
-		return s.Foreground(currentTheme.Title).Render(text)
-	}
+	ws := currentWizStyles()
 
 	var lines []string
 	lines = append(lines, "")
-	lines = append(lines, "  "+label("Instance", custFieldName)+"  "+wiz.custName.View())
+	lines = append(lines, "  "+wizLabel("Instance", wiz.custField, custFieldName, 12)+"  "+wiz.custName.View())
 	lines = append(lines, "")
-	lines = append(lines, "  "+label("CPU", custFieldCPU)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.custField == custFieldCPU, hl, sel, dim))
-	lines = append(lines, "  "+label("RAM", custFieldRAM)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.custField == custFieldRAM, hl, sel, dim))
+	lines = append(lines, "  "+wizLabel("CPU", wiz.custField, custFieldCPU, 12)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.custField == custFieldCPU, ws.hl, ws.sel, ws.dim))
+	lines = append(lines, "  "+wizLabel("RAM", wiz.custField, custFieldRAM, 12)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.custField == custFieldRAM, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 
 	// ── Components field ──────────────────────────────────────────────────────
 	compFocused := wiz.custField == custFieldComponents
 	if wiz.compPickerOpen {
-		lines = append(lines, "  "+hl.Render(" Components "))
+		lines = append(lines, "  "+ws.hl.Render(" Components "))
 		lines = append(lines, "  "+wiz.compPickerSearch.View())
 		const maxVisible = 8
 		start := 0
@@ -464,13 +489,12 @@ func (m model) renderWizardCustom() string {
 		}
 		end := min(len(wiz.compPickerItems), start+maxVisible)
 		if len(wiz.compPickerItems) == 0 {
-			lines = append(lines, "  "+dim.Render("  (no matches)"))
+			lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
 		} else {
 			for i := start; i < end; i++ {
 				item := wiz.compPickerItems[i]
 				isFocused := i == wiz.compPickerIdx
 				if item.isSystem {
-					// Count selected vs total for this system in the filtered view.
 					total, selected := 0, 0
 					for _, pi := range wiz.compPickerItems {
 						if !pi.isSystem && pi.system == item.system {
@@ -488,11 +512,11 @@ func (m model) renderWizardCustom() string {
 					}
 					text := fmt.Sprintf("%s %s  [%d/%d]", icon, item.system, selected, total)
 					if isFocused {
-						lines = append(lines, "  "+hl.Render(text))
+						lines = append(lines, "  "+ws.hl.Render(text))
 					} else if selected > 0 {
-						lines = append(lines, "  "+sel.Render(text))
+						lines = append(lines, "  "+ws.sel.Render(text))
 					} else {
-						lines = append(lines, "  "+dim.Render(text))
+						lines = append(lines, "  "+ws.dim.Render(text))
 					}
 				} else {
 					isSelected := wiz.isCompSelected(item.comp)
@@ -503,53 +527,62 @@ func (m model) renderWizardCustom() string {
 					text := "  " + check + " " + item.comp
 					switch {
 					case isFocused:
-						lines = append(lines, "  "+hl.Render(text))
+						lines = append(lines, "  "+ws.hl.Render(text))
 					case isSelected:
-						lines = append(lines, "  "+sel.Render(text))
+						lines = append(lines, "  "+ws.sel.Render(text))
 					default:
-						lines = append(lines, "  "+dim.Render(text))
+						lines = append(lines, "  "+ws.dim.Render(text))
 					}
 				}
 			}
 		}
+	} else if compFocused {
+		// Focused + picker closed: individual navigable rows.
+		for i, comp := range wiz.selectedComps {
+			var rowPrefix string
+			if i == 0 {
+				rowPrefix = "  " + wizLabel("Components", wiz.custField, custFieldComponents, 12) + "  "
+			} else {
+				rowPrefix = "  " + strings.Repeat(" ", 12) + "  "
+			}
+			if i == wiz.custSelectedIdx {
+				lines = append(lines, rowPrefix+ws.hl.Render(" ✓ "+comp+" "))
+			} else {
+				lines = append(lines, rowPrefix+ws.sel.Render("✓ "+comp))
+			}
+		}
+		// Add button row.
+		isAddFocused := wiz.custSelectedIdx == len(wiz.selectedComps)
+		var addBtn string
+		if isAddFocused {
+			addBtn = ws.hl.Render(" + Add ")
+		} else {
+			addBtn = ws.dim.Render("[ + Add ]")
+		}
+		if len(wiz.selectedComps) == 0 {
+			lines = append(lines, "  "+wizLabel("Components", wiz.custField, custFieldComponents, 12)+"  "+addBtn)
+		} else {
+			lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
+		}
 	} else {
-		// Collapsed: label + selection summary + Add button.
+		// Not focused: compact summary + dim Add button.
 		var summary string
 		if len(wiz.selectedComps) == 0 {
-			summary = dim.Render("(none)")
+			summary = ws.dim.Render("(none)")
 		} else {
-			summary = sel.Render(strings.Join(wiz.selectedComps, ", "))
+			summary = ws.sel.Render(strings.Join(wiz.selectedComps, ", "))
 		}
-		addBtn := "[ + Add ]"
-		if compFocused {
-			addBtn = hl.Render(" + Add ")
-		} else {
-			addBtn = dim.Render(addBtn)
-		}
-		lines = append(lines, "  "+label("Components", custFieldComponents)+"  "+summary)
-		lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
+		lines = append(lines, "  "+wizLabel("Components", wiz.custField, custFieldComponents, 12)+"  "+summary)
+		lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ + Add ]"))
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, "  "+label("MFE", custFieldMFE)+"  "+wiz.custMFEInput.View())
+	lines = append(lines, "  "+wizLabel("MFE", wiz.custField, custFieldMFE, 12)+"  "+wiz.custMFEInput.View())
 	lines = append(lines, "")
-	lines = append(lines, "  "+label("Mode", custFieldMode)+"  "+horizSelector(wiz.custModeIdx, skaffoldModes, wiz.custField == custFieldMode, hl, sel, dim))
+	lines = append(lines, "  "+wizLabel("Mode", wiz.custField, custFieldMode, 12)+"  "+horizSelector(wiz.custModeIdx, skaffoldModes, wiz.custField == custFieldMode, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 	lines = append(lines, "")
-
-	btnBase := lipgloss.NewStyle().Padding(0, 2)
-	var startS, cancelS lipgloss.Style
-	if wiz.custField == custFieldButtons {
-		if wiz.custConfirmIdx == 0 {
-			startS, cancelS = hl.Padding(0, 2), btnBase.Foreground(currentTheme.Muted)
-		} else {
-			startS, cancelS = btnBase.Foreground(currentTheme.Muted), hl.Padding(0, 2)
-		}
-	} else {
-		startS = btnBase.Foreground(currentTheme.Title)
-		cancelS = btnBase.Foreground(currentTheme.Muted)
-	}
-	lines = append(lines, "  "+startS.Render("Start")+"  "+cancelS.Render("Cancel"))
+	lines = append(lines, wizardButtons(wiz.custField == custFieldButtons, wiz.custConfirmIdx, ws.hl))
 	lines = append(lines, "")
 
 	var hintText string
@@ -561,7 +594,7 @@ func (m model) renderWizardCustom() string {
 	case wiz.custField == custFieldCPU || wiz.custField == custFieldRAM:
 		hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
 	case wiz.custField == custFieldComponents:
-		hintText = "  Enter open picker  ·  ↑↓ or Tab to move  ·  Esc cancel"
+		hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
 	case wiz.custField == custFieldMFE:
 		hintText = "  type path  ·  ↑↓ or Tab to move  ·  Esc cancel"
 	case wiz.custField == custFieldMode:
@@ -569,7 +602,7 @@ func (m model) renderWizardCustom() string {
 	case wiz.custField == custFieldButtons:
 		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
-	lines = append(lines, hint.Render(hintText))
+	lines = append(lines, ws.hint.Render(hintText))
 	return strings.Join(lines, "\n")
 }
 

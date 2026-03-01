@@ -68,6 +68,7 @@ func main() {
 	prog = p
 
 	go watchKubectl(instanceCtx, m.instance.Name)
+	go watchMinikubeLog(instanceCtx, minikubeLogPath(m.instance.Name), m.instance.Name)
 	go watchSkaffoldLog(instanceCtx, skaffoldLogPath(m.instance.Name), m.instance.Name)
 
 	if _, err := p.Run(); err != nil {

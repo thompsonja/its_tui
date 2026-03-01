@@ -97,6 +97,7 @@ type startWizard struct {
 	// ── Component picker (shown when custFieldComponents is active) ───────────
 	compAll          ComponentsFile
 	selectedComps    []string
+	custSelectedIdx  int // highlighted row in collapsed view (0..len-1 = comp, len = Add button)
 	compPickerOpen   bool
 	compPickerSearch textinput.Model
 	compPickerItems  []pickerItem // filtered view
@@ -106,9 +107,6 @@ type startWizard struct {
 func (w *startWizard) updateCompFilter() {
 	q := strings.ToLower(w.compPickerSearch.Value())
 	w.compPickerItems = w.compPickerItems[:0]
-	if w.compPickerItems == nil {
-		w.compPickerItems = make([]pickerItem, 0)
-	}
 	for _, sys := range w.compAll.Systems {
 		sysMatches := q == "" || strings.Contains(strings.ToLower(sys.Name), q)
 		var matched []ComponentEntry
@@ -334,11 +332,12 @@ type tickMsg time.Time
 
 // One message type per panel so Update can route cleanly.
 type (
-	minikubeLineMsg string   // appends one line to the minikube panel
-	minikubeSetMsg  []string // replaces the entire minikube panel buffer
-	skaffoldLineMsg string
-	commandLineMsg  string
-	mfeLineMsg      string
+	minikubeLineMsg  string   // appends one line to the minikube log buffer
+	minikubeSetMsg   []string // replaces the kubectl (pods) buffer
+	minikubeReadyMsg struct{} // one-time: kubectl is up → auto-switch to kubectl tab
+	skaffoldLineMsg  string
+	commandLineMsg   string
+	mfeLineMsg       string
 
 	// cmdActiveMsg adjusts the count of running background commands.
 	// Send +1 when a command starts, -1 when it finishes.
@@ -362,7 +361,10 @@ type model struct {
 
 	input textinput.Model
 
-	minikubeBuf []string
+	minikubeBuf         []string // kubectl get pods output
+	minikubeLogBuf      []string // minikube start log output
+	minikubeShowLog     bool     // true = show log, false = show kubectl
+	minikubeAutoSwitched bool   // true after the one-time auto-switch to kubectl has fired
 	skaffoldBuf []string
 	commandsBuf []string
 	mfeBuf      []string
@@ -399,6 +401,7 @@ func newModel() model {
 		focused:            panelCommands,
 		input:              ti,
 		historyIdx:         -1,
+		minikubeShowLog:    true, // start with the Minikube tab selected
 		// Start fullscreen until the user selects or starts an instance.
 		fullscreenProgress: 1.0,
 		fullscreenTarget:   1.0,
@@ -455,4 +458,11 @@ func wrapContent(buf []string, width int) string {
 		result = append(result, wrapLine(line, width))
 	}
 	return strings.Join(result, "\n")
+}
+
+// appendToVP appends line to buf, syncs content to vp, and scrolls to bottom.
+func appendToVP(buf *[]string, vp *viewport.Model, line string) {
+	*buf = appendLine(*buf, line)
+	vp.SetContent(wrapContent(*buf, vp.Width))
+	vp.GotoBottom()
 }

@@ -17,6 +17,26 @@ const flipStep = 0.10
 // fullscreenStep: 0.12 ≈ 8 frames (~133ms) for a full fullscreen transition.
 const fullscreenStep = 0.12
 
+// advanceAnim advances progress toward target by step. Returns the new progress
+// and whether it just settled on target this call.
+func advanceAnim(progress, target, step float64) (float64, bool) {
+	if progress == target {
+		return progress, false
+	}
+	if target > progress {
+		progress += step
+		if progress >= target {
+			return target, true
+		}
+	} else {
+		progress -= step
+		if progress <= target {
+			return target, true
+		}
+	}
+	return progress, false
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -40,67 +60,54 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.spinnerTick++
 		}
 		// Advance card-flip animation toward target.
-		if m.flipProgress != m.flipTarget {
-			if m.flipTarget > m.flipProgress {
-				m.flipProgress += flipStep
-				if m.flipProgress >= m.flipTarget {
-					m.flipProgress = m.flipTarget
-				}
-			} else {
-				m.flipProgress -= flipStep
-				if m.flipProgress <= m.flipTarget {
-					m.flipProgress = m.flipTarget
-					if m.flipTarget == 0 {
-						// Animation completed returning to commands — clean up overlay.
-						m.overlay = overlayNone
-						m.wizard = nil
-					}
-				}
+		if newP, settled := advanceAnim(m.flipProgress, m.flipTarget, flipStep); newP != m.flipProgress {
+			m.flipProgress = newP
+			if settled && m.flipTarget == 0 {
+				// Animation completed returning to commands — clean up overlay.
+				m.overlay = overlayNone
+				m.wizard = nil
 			}
 		}
 		// Advance fullscreen animation toward target.
-		if m.fullscreenProgress != m.fullscreenTarget {
-			if m.fullscreenTarget > m.fullscreenProgress {
-				m.fullscreenProgress += fullscreenStep
-				if m.fullscreenProgress >= m.fullscreenTarget {
-					m.fullscreenProgress = m.fullscreenTarget
-					m.resizePanels() // settle viewports at fullscreen size
-				}
-			} else {
-				m.fullscreenProgress -= fullscreenStep
-				if m.fullscreenProgress <= m.fullscreenTarget {
-					m.fullscreenProgress = m.fullscreenTarget
-					m.resizePanels() // settle viewports at normal size
-				}
+		if newP, settled := advanceAnim(m.fullscreenProgress, m.fullscreenTarget, fullscreenStep); newP != m.fullscreenProgress {
+			m.fullscreenProgress = newP
+			if settled {
+				m.resizePanels() // settle viewports at final size
 			}
 		}
 
 	// ── Streaming log ingestion ──────────────────────────────────────────────
 
 	case minikubeLineMsg:
-		m.minikubeBuf = appendLine(m.minikubeBuf, string(msg))
-		m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
-		m.minikubeVP.GotoBottom()
+		m.minikubeLogBuf = appendLine(m.minikubeLogBuf, string(msg))
+		if m.minikubeShowLog {
+			m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
+			m.minikubeVP.GotoBottom()
+		}
 
 	case minikubeSetMsg:
 		m.minikubeBuf = []string(msg)
-		m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
-		// No GotoBottom — preserve scroll position while the user reads.
+		if !m.minikubeShowLog {
+			m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
+			// No GotoBottom — preserve scroll position while the user reads.
+		}
+
+	case minikubeReadyMsg:
+		// One-time auto-switch: flip to the kubectl tab now that the cluster is up.
+		if !m.minikubeAutoSwitched {
+			m.minikubeAutoSwitched = true
+			m.minikubeShowLog = false
+			m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
+		}
 
 	case skaffoldLineMsg:
-		m.skaffoldBuf = appendLine(m.skaffoldBuf, string(msg))
-		m.skaffoldVP.SetContent(wrapContent(m.skaffoldBuf, m.skaffoldVP.Width))
-		m.skaffoldVP.GotoBottom()
+		appendToVP(&m.skaffoldBuf, &m.skaffoldVP, string(msg))
 
 	case commandLineMsg:
-		m.commandsBuf = appendLine(m.commandsBuf, string(msg))
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
+		appendToVP(&m.commandsBuf, &m.commandsVP, string(msg))
 
 	case mfeLineMsg:
-		m.mfeBuf = appendLine(m.mfeBuf, string(msg))
-		m.mfeVP.SetContent(wrapContent(m.mfeBuf, m.mfeVP.Width))
-		m.mfeVP.GotoBottom()
+		appendToVP(&m.mfeBuf, &m.mfeVP, string(msg))
 
 	// ── Key handling ─────────────────────────────────────────────────────────
 
@@ -158,7 +165,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			switch m.focused {
 			case panelMinikube:
-				m.minikubeVP, cmd = m.minikubeVP.Update(msg)
+				if msg.String() == "t" {
+					m.minikubeShowLog = !m.minikubeShowLog
+					if m.minikubeShowLog {
+						m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
+						m.minikubeVP.GotoBottom()
+					} else {
+						m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
+					}
+				} else {
+					m.minikubeVP, cmd = m.minikubeVP.Update(msg)
+				}
 			case panelSkaffold:
 				m.skaffoldVP, cmd = m.skaffoldVP.Update(msg)
 			case panelCommands:
@@ -193,6 +210,29 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+// printLine appends a line to the commands panel and scrolls to the bottom.
+func (m *model) printLine(s string) {
+	appendToVP(&m.commandsBuf, &m.commandsVP, s)
+}
+
+// switchToInstance cancels the current instance context, sets the new instance
+// name, clears stale panel content, and starts fresh watchers.
+func (m *model) switchToInstance(name string) {
+	cancelInstance()
+	instanceCtx, cancelInstance = context.WithCancel(context.Background())
+	m.instance.Name = name
+	m.minikubeBuf = nil
+	m.minikubeLogBuf = nil
+	m.skaffoldBuf = nil
+	m.minikubeVP.SetContent("")
+	m.skaffoldVP.SetContent("")
+	ctx := instanceCtx
+	go watchKubectl(ctx, name)
+	go watchMinikubeLog(ctx, minikubeLogPath(name), name)
+	go watchSkaffoldLog(ctx, skaffoldLogPath(name), name)
+	go SetCurrentInstance(m.statePath, name) //nolint:errcheck
+}
+
 // dispatchCommand routes typed text to internal command handlers.
 func (m *model) dispatchCommand(line string) {
 	parts := strings.Fields(line)
@@ -207,9 +247,8 @@ func (m *model) dispatchCommand(line string) {
 		m.flipTarget = 1.0
 
 	case "list":
-		m.commandsBuf = appendLine(m.commandsBuf, "$ list")
+		m.printLine("$ list")
 		state, _ := LoadState(m.statePath)
-		// Collect all known names: union of config and state.
 		nameSet := map[string]bool{}
 		for n := range m.configs {
 			nameSet[n] = true
@@ -218,8 +257,8 @@ func (m *model) dispatchCommand(line string) {
 			nameSet[n] = true
 		}
 		if len(nameSet) == 0 {
-			m.commandsBuf = appendLine(m.commandsBuf, "  no instances configured")
-			m.commandsBuf = appendLine(m.commandsBuf, "  create "+DefaultConfigPath()+" to get started")
+			m.printLine("  no instances configured")
+			m.printLine("  create " + DefaultConfigPath() + " to get started")
 		} else {
 			names := make([]string, 0, len(nameSet))
 			for n := range nameSet {
@@ -235,38 +274,19 @@ func (m *model) dispatchCommand(line string) {
 				if n == m.instance.Name {
 					suffix = "  ← current"
 				}
-				m.commandsBuf = appendLine(m.commandsBuf, fmt.Sprintf("  %s  %s%s", marker, n, suffix))
+				m.printLine(fmt.Sprintf("  %s  %s%s", marker, n, suffix))
 			}
 		}
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
 
 	case "use":
-		m.commandsBuf = appendLine(m.commandsBuf, "$ "+line)
+		m.printLine("$ " + line)
 		if len(parts) < 2 {
-			m.commandsBuf = appendLine(m.commandsBuf, "  usage: use <instance-name>")
+			m.printLine("  usage: use <instance-name>")
 		} else {
-			name := parts[1]
-			// Cancel existing watchers and start fresh ones for the new instance.
-			cancelInstance()
-			instanceCtx, cancelInstance = context.WithCancel(context.Background())
-			m.instance.Name = name
-			// Clear stale panel content.
-			m.minikubeBuf = nil
-			m.skaffoldBuf = nil
-			m.minikubeVP.SetContent("")
-			m.skaffoldVP.SetContent("")
-			// Start passive watchers (kubectl + skaffold log tail).
-			ctx := instanceCtx
-			go watchKubectl(ctx, name)
-			go watchSkaffoldLog(ctx, skaffoldLogPath(name), name)
-			// Persist the selected instance.
-			go SetCurrentInstance(m.statePath, name) //nolint:errcheck
-			m.commandsBuf = appendLine(m.commandsBuf, "  using: "+name)
+			m.switchToInstance(parts[1])
+			m.printLine("  using: " + parts[1])
 			m.fullscreenTarget = 0
 		}
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
 
 	case "start":
 		// Always open the wizard — it pre-populates from the current instance.
@@ -276,32 +296,23 @@ func (m *model) dispatchCommand(line string) {
 
 	case "stop":
 		name := m.instance.Name
-		m.commandsBuf = appendLine(m.commandsBuf, "$ stop")
+		m.printLine("$ stop")
 		if name == "" {
-			m.commandsBuf = appendLine(m.commandsBuf, "  no active instance")
-			m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-			m.commandsVP.GotoBottom()
+			m.printLine("  no active instance")
 			break
 		}
-		m.commandsBuf = appendLine(m.commandsBuf, fmt.Sprintf("  stopping %s …", name))
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
-
+		m.printLine(fmt.Sprintf("  stopping %s …", name))
 		// Cancel instanceCtx — kills skaffold, MFE, and log watchers.
 		cancelInstance()
 		instanceCtx, cancelInstance = context.WithCancel(context.Background())
-		// No watchers restarted — there is no active instance after stop.
-
-		// Clear instance state immediately.
 		m.instance.Name = ""
 		delete(m.configs, name)
 		m.minikubeBuf = nil
+		m.minikubeLogBuf = nil
 		m.skaffoldBuf = nil
 		m.minikubeVP.SetContent("")
 		m.skaffoldVP.SetContent("")
 		m.fullscreenTarget = 1 // back to fullscreen with no instance
-
-		// Delete the minikube cluster in the background.
 		sp := m.statePath
 		go func() {
 			prog.Send(cmdActiveMsg(+1))
@@ -316,18 +327,17 @@ func (m *model) dispatchCommand(line string) {
 		}()
 
 	case "theme":
-		m.commandsBuf = appendLine(m.commandsBuf, "$ "+line)
+		m.printLine("$ " + line)
 		if len(parts) < 2 {
-			m.commandsBuf = appendLine(m.commandsBuf, "themes: "+themeNames())
+			m.printLine("themes: " + themeNames())
 		} else {
 			name := parts[1]
 			found := false
 			for _, t := range presets {
 				if t.Name == name {
 					currentTheme = t
-					// Refresh the help overlay with the new palette.
 					m.helpOverlayVP.SetContent(helpContent(m.helpOverlayVP.Width))
-					m.commandsBuf = appendLine(m.commandsBuf, "theme set to: "+name)
+					m.printLine("theme set to: " + name)
 					found = true
 					sp := m.statePath
 					go func() { _ = SaveTheme(sp, name) }()
@@ -335,17 +345,13 @@ func (m *model) dispatchCommand(line string) {
 				}
 			}
 			if !found {
-				m.commandsBuf = appendLine(m.commandsBuf, "unknown theme: "+name+" (try: "+themeNames()+")")
+				m.printLine("unknown theme: " + name + " (try: " + themeNames() + ")")
 			}
 		}
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
 
 	default:
-		m.commandsBuf = appendLine(m.commandsBuf, "$ "+line)
-		m.commandsBuf = appendLine(m.commandsBuf, "unknown command: "+parts[0]+" (try: help)")
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.commandsVP.GotoBottom()
+		m.printLine("$ " + line)
+		m.printLine("unknown command: " + parts[0] + " (try: help)")
 	}
 }
 
@@ -502,12 +508,18 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 	case "tab":
 		if !wiz.compPickerOpen {
 			wiz.custField = (wiz.custField + 1) % custNumFields
+			if wiz.custField == custFieldComponents {
+				wiz.custSelectedIdx = 0
+			}
 			wiz.syncFocus()
 		}
 		return
 	case "shift+tab":
 		if !wiz.compPickerOpen {
 			wiz.custField = (wiz.custField - 1 + custNumFields) % custNumFields
+			if wiz.custField == custFieldComponents {
+				wiz.custSelectedIdx = len(wiz.selectedComps) // land on Add button
+			}
 			wiz.syncFocus()
 		}
 		return
@@ -559,6 +571,7 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			wiz.syncFocus()
 		case "down", "enter":
 			wiz.custField = custFieldComponents
+			wiz.custSelectedIdx = 0
 			wiz.syncFocus()
 		}
 
@@ -582,11 +595,27 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 		} else {
 			switch key {
 			case "up":
-				wiz.custField = custFieldRAM
-				wiz.syncFocus()
+				if wiz.custSelectedIdx > 0 {
+					wiz.custSelectedIdx--
+				} else {
+					wiz.custField = custFieldRAM
+					wiz.syncFocus()
+				}
 			case "down":
-				wiz.custField = custFieldMFE
-				wiz.syncFocus()
+				if wiz.custSelectedIdx < len(wiz.selectedComps) {
+					wiz.custSelectedIdx++
+				} else {
+					wiz.custField = custFieldMFE
+					wiz.syncFocus()
+				}
+			case "x":
+				if wiz.custSelectedIdx < len(wiz.selectedComps) {
+					wiz.selectedComps = append(wiz.selectedComps[:wiz.custSelectedIdx], wiz.selectedComps[wiz.custSelectedIdx+1:]...)
+					// If we removed the last item, clamp to Add button.
+					if wiz.custSelectedIdx > len(wiz.selectedComps) {
+						wiz.custSelectedIdx = len(wiz.selectedComps)
+					}
+				}
 			case "enter":
 				wiz.compPickerOpen = true
 				wiz.compPickerSearch.SetValue("")
@@ -599,6 +628,7 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 		switch key {
 		case "up":
 			wiz.custField = custFieldComponents
+			wiz.custSelectedIdx = len(wiz.selectedComps) // land on Add button
 			wiz.syncFocus()
 		case "down", "enter":
 			wiz.custField = custFieldMode
@@ -700,19 +730,7 @@ func (m *model) executeStartFromCustomWizard() {
 		}
 	}()
 
-	// Switch to the new instance.
-	cancelInstance()
-	instanceCtx, cancelInstance = context.WithCancel(context.Background())
-	m.instance.Name = name
-	m.minikubeBuf = nil
-	m.skaffoldBuf = nil
-	m.minikubeVP.SetContent("")
-	m.skaffoldVP.SetContent("")
-	ctx := instanceCtx
-	go watchKubectl(ctx, name)
-	go watchSkaffoldLog(ctx, skaffoldLogPath(name), name)
-	go SetCurrentInstance(sp, name) //nolint:errcheck
-
+	m.switchToInstance(name)
 	m.fullscreenTarget = 0
 	m.executeStart(startParams{
 		cpu:          cpu,
@@ -771,19 +789,7 @@ func (m *model) executeStartFromFileWizard() {
 		ram = instanceCfg.Minikube.RAM
 	}
 
-	// Switch to the new instance — cancel old watchers, start fresh ones.
-	cancelInstance()
-	instanceCtx, cancelInstance = context.WithCancel(context.Background())
-	m.instance.Name = name
-	m.minikubeBuf = nil
-	m.skaffoldBuf = nil
-	m.minikubeVP.SetContent("")
-	m.skaffoldVP.SetContent("")
-	ctx := instanceCtx
-	go watchKubectl(ctx, name)
-	go watchSkaffoldLog(ctx, skaffoldLogPath(name), name)
-	go SetCurrentInstance(m.statePath, name) //nolint:errcheck
-
+	m.switchToInstance(name)
 	m.fullscreenTarget = 0
 	m.executeStart(startParams{
 		cpu:          cpu,
@@ -794,25 +800,43 @@ func (m *model) executeStartFromFileWizard() {
 	})
 }
 
-// executeStart streams minikube start, then chains skaffold and MFE.
+// executeStart launches all instance processes:
+//   - MFE starts immediately (no dependency on minikube).
+//   - minikube start runs (output → /tmp log, visible in the Minikube panel).
+//   - skaffold starts once minikube completes.
 func (m *model) executeStart(p startParams) {
-	m.commandsBuf = appendLine(m.commandsBuf, fmt.Sprintf("$ minikube start --cpus %s --memory %s", p.cpu, p.ram))
+	m.printLine(fmt.Sprintf("$ minikube start --cpus %s --memory %s", p.cpu, p.ram))
 	if p.skaffoldPath != "" {
-		m.commandsBuf = appendLine(m.commandsBuf, fmt.Sprintf("  + skaffold %s --filename %s", p.skaffoldMode, p.skaffoldPath))
+		m.printLine(fmt.Sprintf("  + skaffold %s --filename %s", p.skaffoldMode, p.skaffoldPath))
 	}
-	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-	m.commandsVP.GotoBottom()
+	if p.mfePath != "" {
+		m.printLine(fmt.Sprintf("  + npm start (%s)", p.mfePath))
+	}
+	m.printLine("  (minikube output → Minikube panel)")
+
+	// Always start on the Minikube tab; reset the auto-switch so it fires once
+	// when kubectl becomes ready.
+	m.minikubeShowLog = true
+	m.minikubeAutoSwitched = false
+	m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
 
 	name := m.instance.Name
 	sp := m.statePath
 
+	// MFE starts immediately — no dependency on minikube.
+	if p.mfePath != "" {
+		go startMFE(p.mfePath)
+	}
+
+	// minikube → skaffold chain. Output goes to the log file tailed by the panel.
 	go func() {
 		prog.Send(cmdActiveMsg(+1))
-		streamToPanel(context.Background(),
-			func(s string) tea.Msg { return commandLineMsg(s) },
-			"minikube", "start", "--cpus", p.cpu, "--memory", p.ram,
-		)
+		err := startMinikubeToLog(name, p.cpu, p.ram)
 		prog.Send(cmdActiveMsg(-1))
+		if err != nil {
+			prog.Send(commandLineMsg(fmt.Sprintf("[minikube: %v]", err)))
+			return
+		}
 		if name != "" {
 			if err := MarkActive(sp, name); err != nil {
 				prog.Send(commandLineMsg("warning: " + err.Error()))
@@ -820,11 +844,14 @@ func (m *model) executeStart(p startParams) {
 				prog.Send(commandLineMsg("instance '" + name + "' marked active"))
 			}
 		}
+		// kubectl get pods: if it succeeds, populate the buffer and trigger
+		// the one-time auto-switch from minikube log → kubectl tab.
+		if lines, ok := kubectlGetPodsOnce(); ok {
+			prog.Send(minikubeSetMsg(lines))
+			prog.Send(minikubeReadyMsg{})
+		}
 		if p.skaffoldPath != "" {
 			go startSkaffoldToLog(name, p.skaffoldPath, p.skaffoldMode)
-		}
-		if p.mfePath != "" {
-			go startMFE(p.mfePath)
 		}
 	}()
 }
@@ -911,42 +938,39 @@ func (m *model) resizePanels() {
 		vpH_overlay  = max(1, rowB-border-title)
 	}
 
+	type vpSpec struct {
+		vp  *viewport.Model
+		buf *[]string
+		w, h int
+	}
+	minikubeBufPtr := &m.minikubeBuf
+	if m.minikubeShowLog {
+		minikubeBufPtr = &m.minikubeLogBuf
+	}
+	specs := []vpSpec{
+		{&m.minikubeVP, minikubeBufPtr, vpW_L, vpH_top},
+		{&m.skaffoldVP, &m.skaffoldBuf, vpW_R, vpH_top},
+		{&m.commandsVP, &m.commandsBuf, vpW_L, vpH_commands},
+		{&m.mfeVP, &m.mfeBuf, vpW_R, vpH_mfe},
+	}
 	if m.minikubeVP.Width == 0 {
 		// First resize: create viewports so keymaps are initialised.
-		m.minikubeVP    = viewport.New(vpW_L, vpH_top)
-		m.skaffoldVP    = viewport.New(vpW_R, vpH_top)
-		m.commandsVP    = viewport.New(vpW_L, vpH_commands)
-		m.mfeVP         = viewport.New(vpW_R, vpH_mfe)
+		for _, s := range specs {
+			*s.vp = viewport.New(s.w, s.h)
+			s.vp.SetContent(wrapContent(*s.buf, s.w))
+			s.vp.GotoBottom()
+		}
 		m.helpOverlayVP = viewport.New(vpW_L, vpH_overlay)
-		// Restore any content that arrived before the first layout.
-		m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
-		m.skaffoldVP.SetContent(wrapContent(m.skaffoldBuf, m.skaffoldVP.Width))
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-		m.mfeVP.SetContent(wrapContent(m.mfeBuf, m.mfeVP.Width))
-		m.minikubeVP.GotoBottom()
-		m.skaffoldVP.GotoBottom()
-		m.commandsVP.GotoBottom()
 	} else {
 		// Subsequent resizes: update dimensions then re-wrap content at new width.
-		m.minikubeVP.Width     = vpW_L
-		m.minikubeVP.Height    = vpH_top
-		m.skaffoldVP.Width     = vpW_R
-		m.skaffoldVP.Height    = vpH_top
-		m.commandsVP.Width     = vpW_L
-		m.commandsVP.Height    = vpH_commands
-		m.mfeVP.Width          = vpW_R
-		m.mfeVP.Height         = vpH_mfe
-		m.helpOverlayVP.Width  = vpW_L
+		for _, s := range specs {
+			s.vp.Width = s.w
+			s.vp.Height = s.h
+			s.vp.SetContent(wrapContent(*s.buf, s.w))
+			s.vp.GotoBottom()
+		}
+		m.helpOverlayVP.Width = vpW_L
 		m.helpOverlayVP.Height = vpH_overlay
-
-		m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, vpW_L))
-		m.skaffoldVP.SetContent(wrapContent(m.skaffoldBuf, vpW_R))
-		m.commandsVP.SetContent(wrapContent(m.commandsBuf, vpW_L))
-		m.mfeVP.SetContent(wrapContent(m.mfeBuf, vpW_R))
-		m.minikubeVP.GotoBottom()
-		m.skaffoldVP.GotoBottom()
-		m.commandsVP.GotoBottom()
-		m.mfeVP.GotoBottom()
 	}
 	// Help content uses width for column layout — refresh on every resize.
 	m.helpOverlayVP.SetContent(helpContent(vpW_L))

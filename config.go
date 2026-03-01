@@ -263,3 +263,11 @@ func skaffoldLogPath(instanceName string) string {
 	}
 	return fmt.Sprintf("/tmp/skaffold_%s.log", instanceName)
 }
+
+// minikubeLogPath returns the per-instance log file written by minikube start.
+func minikubeLogPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+	return fmt.Sprintf("/tmp/minikube_%s.log", instanceName)
+}
