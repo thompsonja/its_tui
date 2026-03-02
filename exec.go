@@ -183,6 +183,8 @@ func startMFE(packageJSONPath string) {
 		prog.Send(mfeLineMsg(fmt.Sprintf("mfe start error: %v", err)))
 		return
 	}
+	// Report the process group ID so it can be persisted to state.
+	prog.Send(mfePIDMsg(cmd.Process.Pid))
 
 	ctx := instanceCtx
 	// Kill the entire process group when the instance context is cancelled.
@@ -210,6 +212,15 @@ func startMFE(packageJSONPath string) {
 	} else {
 		prog.Send(mfeLineMsg("[mfe exited cleanly]"))
 	}
+}
+
+// killProcessGroup sends SIGTERM to the entire process group identified by pgid.
+// Safe to call with pgid <= 0 (no-op).
+func killProcessGroup(pgid int) {
+	if pgid <= 0 {
+		return
+	}
+	_ = syscall.Kill(-pgid, syscall.SIGTERM)
 }
 
 // ── Core streaming primitive ──────────────────────────────────────────────────

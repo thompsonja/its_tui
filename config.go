@@ -93,9 +93,10 @@ func AppendCommandHistory(statePath, line string) error {
 	return SaveState(statePath, s)
 }
 
-// ActiveInstance records when an instance was last started.
+// ActiveInstance records runtime state for a started instance.
 type ActiveInstance struct {
 	StartedAt string `json:"started_at"`
+	MFEPGID   int    `json:"mfe_pgid,omitempty"` // process group ID of the npm process; 0 if not running
 }
 
 // LoadState reads the state JSON file.
@@ -136,14 +137,28 @@ func SaveState(path string, s State) error {
 }
 
 // MarkActive records instanceName as active in the state file.
+// Existing fields (e.g. MFEPGID) are preserved.
 func MarkActive(statePath, instanceName string) error {
 	s, err := LoadState(statePath)
 	if err != nil {
 		return err
 	}
-	s.Instances[instanceName] = ActiveInstance{
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
+	inst := s.Instances[instanceName]
+	inst.StartedAt = time.Now().UTC().Format(time.RFC3339)
+	s.Instances[instanceName] = inst
+	return SaveState(statePath, s)
+}
+
+// SaveMFEPGID persists the MFE process group ID for instanceName.
+// Upserts the entry so it works regardless of whether MarkActive has run yet.
+func SaveMFEPGID(statePath, instanceName string, pgid int) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
 	}
+	inst := s.Instances[instanceName]
+	inst.MFEPGID = pgid
+	s.Instances[instanceName] = inst
 	return SaveState(statePath, s)
 }
 

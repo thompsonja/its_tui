@@ -109,6 +109,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case mfeLineMsg:
 		appendToVP(&m.mfeBuf, &m.mfeVP, string(msg))
 
+	case mfePIDMsg:
+		sp, name := m.statePath, m.instance.Name
+		pgid := int(msg)
+		go func() { _ = SaveMFEPGID(sp, name, pgid) }()
+
 	// ── Key handling ─────────────────────────────────────────────────────────
 
 	case tea.KeyMsg:
@@ -143,6 +148,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "tab":
+			// Picker open: Tab closes only the picker, does not cycle panels.
+			if m.wizard != nil && m.wizard.compPickerOpen {
+				m.wizard.compPickerOpen = false
+				m.wizard.syncFocus()
+				return m, tea.Batch(cmds...)
+			}
 			if m.instance.Name != "" {
 				// Tab exits the help overlay before cycling.
 				if m.flipTarget == 1.0 {
@@ -153,6 +164,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "shift+tab":
+			// Picker open: Shift+Tab closes only the picker, does not cycle panels.
+			if m.wizard != nil && m.wizard.compPickerOpen {
+				m.wizard.compPickerOpen = false
+				m.wizard.syncFocus()
+				return m, tea.Batch(cmds...)
+			}
 			if m.instance.Name != "" {
 				if m.flipTarget == 1.0 {
 					m.flipTarget = 0.0
@@ -316,6 +333,13 @@ func (m *model) dispatchCommand(line string) {
 		sp := m.statePath
 		go func() {
 			prog.Send(cmdActiveMsg(+1))
+			// Kill any persisted MFE process group (covers restarted-session scenario
+			// where cancelInstance() above has no live process to signal).
+			if state, err := LoadState(sp); err == nil {
+				if inst, ok := state.Instances[name]; ok {
+					killProcessGroup(inst.MFEPGID)
+				}
+			}
 			streamToPanel(context.Background(),
 				func(s string) tea.Msg { return commandLineMsg(s) },
 				"minikube", "delete",
@@ -503,10 +527,13 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 	wiz := m.wizard
 	key := msg.String()
 
-	// Tab/Shift+Tab cycle fields only when the picker is closed.
+	// Tab/Shift+Tab: cycle fields when picker is closed; close picker when open.
 	switch key {
 	case "tab":
-		if !wiz.compPickerOpen {
+		if wiz.compPickerOpen {
+			wiz.compPickerOpen = false
+			wiz.syncFocus()
+		} else {
 			wiz.custField = (wiz.custField + 1) % custNumFields
 			if wiz.custField == custFieldComponents {
 				wiz.custSelectedIdx = 0
@@ -515,7 +542,10 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 		}
 		return
 	case "shift+tab":
-		if !wiz.compPickerOpen {
+		if wiz.compPickerOpen {
+			wiz.compPickerOpen = false
+			wiz.syncFocus()
+		} else {
 			wiz.custField = (wiz.custField - 1 + custNumFields) % custNumFields
 			if wiz.custField == custFieldComponents {
 				wiz.custSelectedIdx = len(wiz.selectedComps) // land on Add button

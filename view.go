@@ -588,7 +588,7 @@ func (m model) renderWizardCustom() string {
 	var hintText string
 	switch {
 	case wiz.compPickerOpen:
-		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Esc close"
+		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
 	case wiz.custField == custFieldName:
 		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
 	case wiz.custField == custFieldCPU || wiz.custField == custFieldRAM:

@@ -338,6 +338,7 @@ type (
 	skaffoldLineMsg  string
 	commandLineMsg   string
 	mfeLineMsg       string
+	mfePIDMsg        int // process group ID reported by startMFE after cmd.Start()
 
 	// cmdActiveMsg adjusts the count of running background commands.
 	// Send +1 when a command starts, -1 when it finishes.
