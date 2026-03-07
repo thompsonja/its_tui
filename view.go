@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"fmt"
@@ -23,7 +23,7 @@ func (m model) View() string {
 
 	colL := m.width / 2
 	colR := m.width - colL
-	grid := m.height - 1 // 1 row reserved for the top bar
+	grid := m.height - 1
 	rowT := grid / 2
 	rowB := grid - rowT
 
@@ -39,9 +39,6 @@ func (m model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, bar, topRow, bottomRow)
 }
 
-// fullscreenHint returns a dim contextual hint for the Ctrl+F binding.
-// Uses fullscreenTarget so the text flips at the moment the key is pressed,
-// not only once the animation completes.
 func (m model) fullscreenHint() string {
 	if m.instance.Name == "" {
 		return ""
@@ -55,8 +52,6 @@ func (m model) fullscreenHint() string {
 	return lipgloss.NewStyle().Foreground(currentTheme.Muted).Render(text)
 }
 
-// renderFullscreenTransition renders the focused panel at an interpolated size
-// and position between its grid slot and the full terminal.
 func (m model) renderFullscreenTransition() string {
 	p := m.fullscreenProgress
 	grid := m.height - 1
@@ -71,7 +66,6 @@ func (m model) renderFullscreenTransition() string {
 		return a + int(float64(b-a)*p)
 	}
 
-	// Each panel's top-left corner in the grid, plus its normal dimensions.
 	var normalX, normalY, normalW, normalH int
 	switch m.focused {
 	case panelMinikube:
@@ -89,7 +83,6 @@ func (m model) renderFullscreenTransition() string {
 	w := lerp(normalW, m.width)
 	h := lerp(normalH, grid)
 
-	// Temporarily resize the focused viewport (safe: m is a value copy in View).
 	var panel string
 	switch m.focused {
 	case panelMinikube:
@@ -116,11 +109,9 @@ func (m model) renderFullscreenTransition() string {
 	lines := strings.Split(panel, "\n")
 
 	out := make([]string, 0, grid)
-	// Top padding rows above the panel.
 	for range y {
 		out = append(out, blank)
 	}
-	// Panel rows: left-pad then right-pad to terminal width.
 	for _, line := range lines {
 		vw := x + lipgloss.Width(line)
 		rightPad := ""
@@ -129,15 +120,12 @@ func (m model) renderFullscreenTransition() string {
 		}
 		out = append(out, leftPad+line+rightPad)
 	}
-	// Bottom padding rows.
 	for len(out) < grid {
 		out = append(out, blank)
 	}
 	return strings.Join(out, "\n")
 }
 
-// renderFullscreen renders only the focused panel at full terminal width/height.
-// The hint is appended automatically by the panel renderers since the panel is focused.
 func (m model) renderFullscreen() string {
 	w := m.width
 	grid := m.height - 1
@@ -153,9 +141,6 @@ func (m model) renderFullscreen() string {
 	}
 }
 
-// minikubeTitle returns the minikube panel title as two tab segments.
-// The active tab is highlighted with the Focused color; the inactive one is dim.
-// When focused, a dim tooltip hints at the t key.
 func (m model) minikubeTitle(focused bool) string {
 	active := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
 	dim := lipgloss.NewStyle().Foreground(currentTheme.Muted)
@@ -176,9 +161,6 @@ func (m model) renderTopBar() string {
 	return topBarStyle().Width(m.width).Render(m.instance.StatusLine())
 }
 
-// renderScrollPanel renders a titled panel containing pre-rendered content.
-// w is the outer panel width. Height is not set — the viewport inside always
-// produces exactly the right number of lines, so panel height = content + borders.
 func (m model) renderScrollPanel(panel int, title, content string, w, _ int) string {
 	focused := m.focused == panel
 	if focused {
@@ -195,8 +177,6 @@ func (m model) renderScrollPanel(panel int, title, content string, w, _ int) str
 		Render(inner)
 }
 
-// renderCommandsPanel renders the bottom-left panel, which can either show the
-// command input/output or the help overlay — animated with a card-flip effect.
 func (m model) renderCommandsPanel(w, h int) string {
 	focused := m.focused == panelCommands
 	hint := ""
@@ -204,7 +184,6 @@ func (m model) renderCommandsPanel(w, h int) string {
 		hint = m.fullscreenHint()
 	}
 
-	// Inner height below the title: panel outer minus border(2) minus title(2).
 	const border = 2
 	const titleH = 2
 	innerH := h - border - titleH
@@ -222,34 +201,28 @@ func (m model) renderCommandsPanel(w, h int) string {
 
 	switch {
 	case p <= 0:
-		// Commands fully visible.
 		titleText = " Commands" + spinner + hint
 		content = m.commandsContent(w)
 
 	case p >= 1:
-		// Overlay fully visible.
 		titleText, content = m.renderOverlay(w, innerH)
 		titleText += spinner + hint
 
 	case p < 0.5:
-		// Phase 1: shrink the commands side toward the midpoint.
 		multiplier := 1.0 - 2.0*p
 		shrunkH := max(0, int(float64(innerH)*multiplier))
 		titleText = " Commands" + spinner + hint
 		if shrunkH < 2 {
-			// Too few lines to show sep+input; just blank.
 			content = strings.Repeat("\n", innerH-1)
 		} else {
-			// Temporarily narrow the viewport height so it renders fewer lines.
 			tmpVP := m.commandsVP
-			tmpVP.Height = max(1, shrunkH-2) // -2 for sep + input
+			tmpVP.Height = max(1, shrunkH-2)
 			sep := separatorStyle().Render(strings.Repeat("─", w-2))
 			partial := lipgloss.JoinVertical(lipgloss.Left, tmpVP.View(), sep, m.input.View())
 			content = padToHeight(partial, tmpVP.Height+2, innerH)
 		}
 
 	default:
-		// Phase 2 (p >= 0.5): expand the overlay from the midpoint.
 		multiplier := 2.0*p - 1.0
 		expandH := max(1, int(float64(innerH)*multiplier))
 		titleText, content = m.renderOverlayExpanding(w, innerH, expandH)
@@ -266,7 +239,6 @@ func (m model) renderCommandsPanel(w, h int) string {
 		Render(inner)
 }
 
-// commandsContent returns the full commands panel body: viewport + separator + input.
 func (m model) commandsContent(w int) string {
 	sep := separatorStyle().Render(strings.Repeat("─", w-2))
 	return lipgloss.JoinVertical(lipgloss.Left,
@@ -276,9 +248,6 @@ func (m model) commandsContent(w int) string {
 	)
 }
 
-// padToHeight pads a rendered block (with `current` lines) up to `target` lines
-// by appending blank lines. This keeps the panel frame the same height during
-// the card-flip animation.
 func padToHeight(rendered string, current, target int) string {
 	if current >= target {
 		return rendered
@@ -288,7 +257,6 @@ func padToHeight(rendered string, current, target int) string {
 
 // ── Overlay dispatch ─────────────────────────────────────────────────────────
 
-// renderOverlay returns the (title, content) for the fully-visible overlay.
 func (m model) renderOverlay(w, innerH int) (string, string) {
 	switch m.overlay {
 	case overlayHelp:
@@ -300,7 +268,6 @@ func (m model) renderOverlay(w, innerH int) (string, string) {
 	return " Commands", ""
 }
 
-// renderOverlayExpanding returns (title, content) for the expanding animation phase.
 func (m model) renderOverlayExpanding(w, innerH, expandH int) (string, string) {
 	switch m.overlay {
 	case overlayHelp:
@@ -318,12 +285,11 @@ func (m model) renderOverlayExpanding(w, innerH, expandH int) (string, string) {
 
 // ── Start wizard renderer ─────────────────────────────────────────────────────
 
-// wizStyles holds the four lipgloss styles used across all wizard screens.
 type wizStyles struct {
-	hl   lipgloss.Style // highlighted/active item (background fill)
-	sel  lipgloss.Style // selected but not active (accent foreground)
-	dim  lipgloss.Style // inactive item
-	hint lipgloss.Style // bottom hint line
+	hl   lipgloss.Style
+	sel  lipgloss.Style
+	dim  lipgloss.Style
+	hint lipgloss.Style
 }
 
 func currentWizStyles() wizStyles {
@@ -335,7 +301,6 @@ func currentWizStyles() wizStyles {
 	}
 }
 
-// wizLabel renders a fixed-width label, highlighted when activeField == thisField.
 func wizLabel(text string, activeField, thisField, labelW int) string {
 	s := lipgloss.NewStyle().Width(labelW)
 	if activeField == thisField {
@@ -344,7 +309,6 @@ func wizLabel(text string, activeField, thisField, labelW int) string {
 	return s.Foreground(currentTheme.Title).Render(text)
 }
 
-// wizardButtons renders the Start / Cancel button row.
 func wizardButtons(focused bool, idx int, hl lipgloss.Style) string {
 	btn := lipgloss.NewStyle().Padding(0, 2)
 	var startS, cancelS lipgloss.Style
@@ -374,7 +338,6 @@ func (m model) wizardTitle() string {
 	return " Start"
 }
 
-// renderWizard dispatches to the appropriate screen renderer.
 func (m model) renderWizard() string {
 	wiz := m.wizard
 	if wiz == nil {
@@ -390,7 +353,6 @@ func (m model) renderWizard() string {
 	}
 }
 
-// renderWizardSelect renders the opening mode-select screen.
 func (m model) renderWizardSelect() string {
 	wiz := m.wizard
 	ws := currentWizStyles()
@@ -412,7 +374,6 @@ func (m model) renderWizardSelect() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderWizardFile renders the file-based wizard (instance name + config path + mode).
 func (m model) renderWizardFile() string {
 	wiz := m.wizard
 	ws := currentWizStyles()
@@ -464,7 +425,6 @@ func (m model) renderWizardFile() string {
 	return strings.Join(lines, "\n")
 }
 
-// renderWizardCustom renders the custom-instance wizard.
 func (m model) renderWizardCustom() string {
 	wiz := m.wizard
 	ws := currentWizStyles()
@@ -537,7 +497,6 @@ func (m model) renderWizardCustom() string {
 			}
 		}
 	} else if compFocused {
-		// Focused + picker closed: individual navigable rows.
 		for i, comp := range wiz.selectedComps {
 			var rowPrefix string
 			if i == 0 {
@@ -551,7 +510,6 @@ func (m model) renderWizardCustom() string {
 				lines = append(lines, rowPrefix+ws.sel.Render("✓ "+comp))
 			}
 		}
-		// Add button row.
 		isAddFocused := wiz.custSelectedIdx == len(wiz.selectedComps)
 		var addBtn string
 		if isAddFocused {
@@ -565,7 +523,6 @@ func (m model) renderWizardCustom() string {
 			lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
 		}
 	} else {
-		// Not focused: compact summary + dim Add button.
 		var summary string
 		if len(wiz.selectedComps) == 0 {
 			summary = ws.dim.Render("(none)")
@@ -577,8 +534,55 @@ func (m model) renderWizardCustom() string {
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, "  "+wizLabel("MFE", wiz.custField, custFieldMFE, 12)+"  "+wiz.custMFEInput.View())
+	// ── MFE field ─────────────────────────────────────────────────────────────
+	mfeFocused := wiz.custField == custFieldMFE
+	if wiz.mfePickerOpen {
+		lines = append(lines, "  "+ws.hl.Render(" MFE "))
+		lines = append(lines, "  "+wiz.mfePickerSearch.View())
+		const maxVisible = 6
+		start := 0
+		if wiz.mfePickerIdx >= maxVisible {
+			start = wiz.mfePickerIdx - maxVisible + 1
+		}
+		end := min(len(wiz.mfePickerItems), start+maxVisible)
+		if len(wiz.mfePickerItems) == 0 {
+			lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
+		} else {
+			for i := start; i < end; i++ {
+				mfe := wiz.mfePickerItems[i]
+				isFocused := i == wiz.mfePickerIdx
+				isSelected := mfe == wiz.selectedMFE
+				check := "○"
+				if isSelected {
+					check = "●"
+				}
+				text := check + " " + mfe
+				switch {
+				case isFocused:
+					lines = append(lines, "  "+ws.hl.Render(text))
+				case isSelected:
+					lines = append(lines, "  "+ws.sel.Render(text))
+				default:
+					lines = append(lines, "  "+ws.dim.Render(text))
+				}
+			}
+		}
+	} else {
+		var mfeDisplay string
+		if wiz.selectedMFE == "" {
+			mfeDisplay = ws.dim.Render("(none)")
+		} else if mfeFocused {
+			mfeDisplay = ws.sel.Render(wiz.selectedMFE)
+		} else {
+			mfeDisplay = ws.dim.Render(wiz.selectedMFE)
+		}
+		lines = append(lines, "  "+wizLabel("MFE", wiz.custField, custFieldMFE, 12)+"  "+mfeDisplay)
+		if mfeFocused && len(wiz.mfeAll) > 0 {
+			lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ Enter to select ]"))
+		}
+	}
 	lines = append(lines, "")
+
 	lines = append(lines, "  "+wizLabel("Mode", wiz.custField, custFieldMode, 12)+"  "+horizSelector(wiz.custModeIdx, skaffoldModes, wiz.custField == custFieldMode, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 	lines = append(lines, "")
@@ -589,6 +593,8 @@ func (m model) renderWizardCustom() string {
 	switch {
 	case wiz.compPickerOpen:
 		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
+	case wiz.mfePickerOpen:
+		hintText = "  ↑↓ navigate  ·  Enter select  ·  type to search  ·  Tab done"
 	case wiz.custField == custFieldName:
 		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
 	case wiz.custField == custFieldCPU || wiz.custField == custFieldRAM:
@@ -596,7 +602,11 @@ func (m model) renderWizardCustom() string {
 	case wiz.custField == custFieldComponents:
 		hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
 	case wiz.custField == custFieldMFE:
-		hintText = "  type path  ·  ↑↓ or Tab to move  ·  Esc cancel"
+		if len(wiz.mfeAll) > 0 {
+			hintText = "  Enter to pick  ·  x clear  ·  ↑↓ or Tab to move  ·  Esc cancel"
+		} else {
+			hintText = "  ↑↓ or Tab to move  ·  Esc cancel"
+		}
 	case wiz.custField == custFieldMode:
 		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
 	case wiz.custField == custFieldButtons:
@@ -606,9 +616,6 @@ func (m model) renderWizardCustom() string {
 	return strings.Join(lines, "\n")
 }
 
-// horizSelector renders a row of options.
-// When focused, the selected option gets a background highlight (hlStyle);
-// when not focused it gets the plain accent foreground (selStyle).
 func horizSelector(idx int, opts []string, focused bool, hlStyle, selStyle, dimStyle lipgloss.Style) string {
 	parts := make([]string, len(opts))
 	for i, opt := range opts {
@@ -627,10 +634,6 @@ func horizSelector(idx int, opts []string, focused bool, hlStyle, selStyle, dimS
 
 // helpContent builds the help text, arranging sections into columns when the
 // available width allows it.
-//
-//	width < 64  → 1 column (stacked)
-//	width >= 64 → 2 columns: Navigation | Commands + Global
-//	width >= 96 → 3 columns: Navigation | Commands | Global
 func helpContent(width int) string {
 	nav := helpSection("Navigation", []helpEntry{
 		{"Tab / Shift+Tab", "cycle panels"},
@@ -647,6 +650,7 @@ func helpContent(width int) string {
 		{"use <name>", "switch to instance"},
 		{"start", "start current instance"},
 		{"stop", "stop instance + delete cluster"},
+		{"logs", "show log file paths"},
 		{"theme [name]", "set color theme"},
 		{"", ""},
 		{"Enter", "run command"},
@@ -679,9 +683,6 @@ func helpContent(width int) string {
 
 type helpEntry struct{ key, desc string }
 
-// helpSection renders one titled group of keybindings as a plain string.
-// The divider under the title is sized to match the longest line in the section.
-// fmt.Sprintf's %-Ns pads by rune count, so single-width Unicode keys (↑ ↓) align correctly.
 func helpSection(title string, entries []helpEntry) string {
 	titleLine := "  " + title
 
@@ -694,7 +695,6 @@ func helpSection(title string, entries []helpEntry) string {
 		}
 	}
 
-	// Find the longest line by rune count (display width).
 	maxW := len([]rune(titleLine))
 	for _, l := range body {
 		if w := len([]rune(l)); w > maxW {

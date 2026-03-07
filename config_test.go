@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"os"
@@ -172,7 +172,6 @@ func TestMarkInactive(t *testing.T) {
 
 func TestMarkInactive_NonexistentInstance(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	// Should not error even if instance was never added.
 	if err := MarkInactive(path, "ghost"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

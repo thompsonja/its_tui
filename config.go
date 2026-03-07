@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -36,7 +35,7 @@ type SkaffoldConfig struct {
 
 // MFEConfig holds the micro-frontend configuration.
 type MFEConfig struct {
-	Path string `yaml:"path"` // path to package.json
+	Path string `yaml:"path"` // path to package.json directory
 }
 
 // validName matches instance names: alphanumeric, hyphens, underscores.
@@ -67,145 +66,21 @@ func LoadConfigs(path string) (Configs, error) {
 	return cfg, nil
 }
 
-// ── JSON state ────────────────────────────────────────────────────────────────
-
-// State tracks which instances have been started.
-type State struct {
-	Instances       map[string]ActiveInstance `json:"instances"`
-	CurrentInstance string                    `json:"current_instance,omitempty"`
-	CommandHistory  []string                  `json:"command_history,omitempty"`
-	Theme           string                    `json:"theme,omitempty"`
-}
-
-const maxHistoryLen = 10
-
-// AppendCommandHistory adds line to the persisted command history, keeping the
-// last maxHistoryLen entries.
-func AppendCommandHistory(statePath, line string) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	s.CommandHistory = append(s.CommandHistory, line)
-	if len(s.CommandHistory) > maxHistoryLen {
-		s.CommandHistory = s.CommandHistory[len(s.CommandHistory)-maxHistoryLen:]
-	}
-	return SaveState(statePath, s)
-}
-
-// ActiveInstance records runtime state for a started instance.
-type ActiveInstance struct {
-	StartedAt string `json:"started_at"`
-	MFEPGID   int    `json:"mfe_pgid,omitempty"` // process group ID of the npm process; 0 if not running
-}
-
-// LoadState reads the state JSON file.
-// A missing file returns an empty State (not an error).
-func LoadState(path string) (State, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return State{Instances: map[string]ActiveInstance{}}, nil
-		}
-		return State{}, fmt.Errorf("reading state %s: %w", path, err)
-	}
-	var s State
-	if err := json.Unmarshal(data, &s); err != nil {
-		return State{}, fmt.Errorf("parsing state %s: %w", path, err)
-	}
-	if s.Instances == nil {
-		s.Instances = map[string]ActiveInstance{}
-	}
-	return s, nil
-}
-
-// SaveState atomically writes the state JSON file, creating parent dirs as needed.
-func SaveState(path string, s State) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("creating state dir: %w", err)
-	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Write atomically via a temp file + rename.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-// MarkActive records instanceName as active in the state file.
-// Existing fields (e.g. MFEPGID) are preserved.
-func MarkActive(statePath, instanceName string) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	inst := s.Instances[instanceName]
-	inst.StartedAt = time.Now().UTC().Format(time.RFC3339)
-	s.Instances[instanceName] = inst
-	return SaveState(statePath, s)
-}
-
-// SaveMFEPGID persists the MFE process group ID for instanceName.
-// Upserts the entry so it works regardless of whether MarkActive has run yet.
-func SaveMFEPGID(statePath, instanceName string, pgid int) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	inst := s.Instances[instanceName]
-	inst.MFEPGID = pgid
-	s.Instances[instanceName] = inst
-	return SaveState(statePath, s)
-}
-
-// MarkInactive removes instanceName from the active instances in the state file.
-func MarkInactive(statePath, instanceName string) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	delete(s.Instances, instanceName)
-	return SaveState(statePath, s)
-}
-
-// SaveTheme persists the chosen theme name to the state file.
-func SaveTheme(statePath, themeName string) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	s.Theme = themeName
-	return SaveState(statePath, s)
-}
-
-// SetCurrentInstance persists the currently-selected instance to the state file.
-func SetCurrentInstance(statePath, instanceName string) error {
-	s, err := LoadState(statePath)
-	if err != nil {
-		return err
-	}
-	s.CurrentInstance = instanceName
-	return SaveState(statePath, s)
-}
-
 // ── Component catalogue ───────────────────────────────────────────────────────
 
-// ComponentEntry is one named component inside a system.
-type ComponentEntry struct {
+// Component is a named deployable unit within a system.
+type Component struct {
 	Name string `json:"name"`
 }
 
 // System groups a set of components under a shared name.
 type System struct {
-	Name       string           `json:"name"`
-	Components []ComponentEntry `json:"components"`
+	Name       string      `json:"name"`
+	Components []Component `json:"components"`
 }
 
-// ComponentsFile is the top-level structure of sample/components.json.
+// ComponentsFile is the top-level structure of a components JSON file.
+// Use LoadComponents to parse it.
 type ComponentsFile struct {
 	Systems []System `json:"systems"`
 }
@@ -251,26 +126,6 @@ func WriteCustomConfig(statePath, instanceName string, cfg CustomInstanceConfig)
 	return os.WriteFile(path, data, 0o644)
 }
 
-// ── Path helpers ──────────────────────────────────────────────────────────────
-
-func tuiDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".tui")
-}
-
-// DefaultConfigPath returns the first config.yaml found: local then ~/.tui/.
-func DefaultConfigPath() string {
-	if _, err := os.Stat("config.yaml"); err == nil {
-		return "config.yaml"
-	}
-	return filepath.Join(tuiDir(), "config.yaml")
-}
-
-// DefaultStatePath returns ~/.tui/state.json.
-func DefaultStatePath() string {
-	return filepath.Join(tuiDir(), "state.json")
-}
-
 // skaffoldLogPath returns the per-instance log file written by skaffold dev.
 func skaffoldLogPath(instanceName string) string {
 	if instanceName == "" {
@@ -285,4 +140,12 @@ func minikubeLogPath(instanceName string) string {
 		return ""
 	}
 	return fmt.Sprintf("/tmp/minikube_%s.log", instanceName)
+}
+
+// mfeLogPath returns the per-instance log file written by the MFE process.
+func mfeLogPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+	return fmt.Sprintf("/tmp/mfe_%s.log", instanceName)
 }

@@ -1,4 +1,4 @@
-package main
+package tui
 
 import (
 	"strings"
@@ -133,17 +133,17 @@ func TestWrapContent_EmptyBuf(t *testing.T) {
 func newTestWiz() *startWizard {
 	si := textinput.New()
 	si.Width = 40
-	cf := ComponentsFile{Systems: []System{
-		{Name: "checkout", Components: []ComponentEntry{
+	systems := []System{
+		{Name: "checkout", Components: []Component{
 			{Name: "checkout-backend"},
 			{Name: "checkout-bff"},
 		}},
-		{Name: "user", Components: []ComponentEntry{
+		{Name: "user", Components: []Component{
 			{Name: "user-service"},
 			{Name: "user-bff"},
 		}},
-	}}
-	wiz := &startWizard{compAll: cf, compPickerSearch: si}
+	}
+	wiz := &startWizard{compAll: systems, compPickerSearch: si}
 	wiz.updateCompFilter()
 	return wiz
 }
@@ -246,7 +246,6 @@ func TestToggleComp_PreservesOthers(t *testing.T) {
 
 func TestTogglePickerItem_Component(t *testing.T) {
 	wiz := newTestWiz()
-	// Find the index of checkout-backend (should be item[1])
 	idx := -1
 	for i, pi := range wiz.compPickerItems {
 		if !pi.isSystem && pi.comp == "checkout-backend" {
@@ -265,7 +264,6 @@ func TestTogglePickerItem_Component(t *testing.T) {
 
 func TestTogglePickerItem_System_SelectsAll(t *testing.T) {
 	wiz := newTestWiz()
-	// Find checkout system header (should be item[0])
 	wiz.togglePickerItem(0)
 	if !wiz.isCompSelected("checkout-backend") || !wiz.isCompSelected("checkout-bff") {
 		t.Fatal("expected all checkout components selected")
@@ -275,7 +273,7 @@ func TestTogglePickerItem_System_SelectsAll(t *testing.T) {
 func TestTogglePickerItem_System_DeselectsAll(t *testing.T) {
 	wiz := newTestWiz()
 	wiz.selectedComps = []string{"checkout-backend", "checkout-bff"}
-	wiz.togglePickerItem(0) // toggle checkout system header — all already selected → deselect
+	wiz.togglePickerItem(0)
 	if wiz.isCompSelected("checkout-backend") || wiz.isCompSelected("checkout-bff") {
 		t.Fatal("expected all checkout components deselected")
 	}
@@ -283,8 +281,8 @@ func TestTogglePickerItem_System_DeselectsAll(t *testing.T) {
 
 func TestTogglePickerItem_System_PartialSelectsRemaining(t *testing.T) {
 	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend"} // one already selected
-	wiz.togglePickerItem(0)                           // should select the missing one too
+	wiz.selectedComps = []string{"checkout-backend"}
+	wiz.togglePickerItem(0)
 	if !wiz.isCompSelected("checkout-bff") {
 		t.Fatal("expected checkout-bff to be selected")
 	}
@@ -292,7 +290,6 @@ func TestTogglePickerItem_System_PartialSelectsRemaining(t *testing.T) {
 		t.Fatal("checkout-backend should still be selected")
 	}
 }
-
 
 // ── wrapLine edge cases ───────────────────────────────────────────────────────
 
@@ -319,7 +316,6 @@ func TestWrapContent_SingleLine_NoWrap(t *testing.T) {
 }
 
 func TestWrapContent_PreservesLineCount(t *testing.T) {
-	// A line that fits exactly should not gain an extra newline.
 	line := strings.Repeat("x", 10)
 	got := wrapContent([]string{line}, 10)
 	if strings.Count(got, "\n") != 0 {

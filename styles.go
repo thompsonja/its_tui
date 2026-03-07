@@ -1,4 +1,4 @@
-package main
+package tui
 
 import "github.com/charmbracelet/lipgloss"
 
@@ -41,5 +41,5 @@ func topBarStyle() lipgloss.Style {
 		Foreground(currentTheme.BarText).
 		Bold(true).
 		AlignHorizontal(lipgloss.Center).
-		Padding(0, 1) // 1-cell left/right padding inside the bar
+		Padding(0, 1)
 }
