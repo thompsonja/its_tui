@@ -1,4 +1,4 @@
-package tui
+package step
 
 import (
 	"context"
@@ -7,8 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"syscall"
-
-	tea "github.com/charmbracelet/bubbletea"
+	"tui/config"
 )
 
 // MFEStep runs a micro-frontend command and streams output to the MFE panel.
@@ -19,13 +18,12 @@ type MFEStep struct {
 	pgid int // set by Start; used by Stop
 }
 
-func (s *MFEStep) ID() string                    { return "mfe" }
-func (s *MFEStep) LogPath(name string) string    { return mfeLogPath(name) }
-func (s *MFEStep) PanelLine(line string) tea.Msg { return mfeLineMsg(line) }
+func (s *MFEStep) ID() string             { return "mfe" }
+func (s *MFEStep) LogPath(name string) string { return config.MfeLogPath(name) }
 
 // ReadConfig reads the MFE working directory from cfg.MFE.Path, constructing
 // a default `npm start` command. Does nothing when cfg.MFE.Path is empty.
-func (s *MFEStep) ReadConfig(cfg InstanceConfig) {
+func (s *MFEStep) ReadConfig(cfg config.InstanceConfig) {
 	if cfg.MFE.Path != "" {
 		s.Cmd = MFECommand{
 			Cmd:  "npm",
@@ -36,14 +34,14 @@ func (s *MFEStep) ReadConfig(cfg InstanceConfig) {
 }
 
 // WriteConfig writes the MFE working directory back into cfg.MFE.Path.
-func (s *MFEStep) WriteConfig(cfg *InstanceConfig) {
+func (s *MFEStep) WriteConfig(cfg *config.InstanceConfig) {
 	cfg.MFE.Path = s.Cmd.Dir
 }
 
 // Start launches the MFE command and returns once the process is running.
 // The process runs in the background and is killed when ctx is cancelled.
 func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
-	lf, err := os.Create(mfeLogPath(instanceName))
+	lf, err := os.Create(config.MfeLogPath(instanceName))
 	if err != nil {
 		return fmt.Errorf("log create: %w", err)
 	}
@@ -59,7 +57,7 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 		return err
 	}
 	s.pgid = cmd.Process.Pid
-	prog.Send(mfePIDMsg(cmd.Process.Pid))
+	Send(PIDMsg{PID: cmd.Process.Pid})
 
 	// Kill the process group when the instance context is cancelled.
 	go func() {
@@ -86,10 +84,6 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 
 // Stop sends SIGTERM to the MFE process group.
 func (s *MFEStep) Stop(_ context.Context, _ string) error {
-	killProcessGroup(s.pgid)
+	KillProcessGroup(s.pgid)
 	return nil
 }
-
-// IsReady returns true immediately — MFE is considered ready as soon as the
-// process has started.
-func (s *MFEStep) IsReady(_ context.Context, _ string) bool { return true }

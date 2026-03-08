@@ -1,0 +1,138 @@
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// State tracks runtime data across TUI sessions.
+type State struct {
+	Theme          string         `json:"theme,omitempty"`
+	CommandHistory []string       `json:"command_history,omitempty"`
+	Instance       *InstanceState `json:"instance,omitempty"`
+}
+
+// InstanceState holds everything about the currently-running instance.
+// It is written incrementally: selections are saved at wizard submission,
+// StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
+// the MFE process starts. Instance is nil when nothing is running.
+type InstanceState struct {
+	StartedAt  string   `json:"started_at,omitempty"`
+	MFEPGID    int      `json:"mfe_pgid,omitempty"`
+	CPU        string   `json:"cpu,omitempty"`
+	RAM        string   `json:"ram,omitempty"`
+	Components []string `json:"components,omitempty"`
+	MFE        string   `json:"mfe,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
+}
+
+const maxHistoryLen = 10
+
+// AppendCommandHistory adds line to the persisted command history, keeping the
+// last maxHistoryLen entries.
+func AppendCommandHistory(statePath, line string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.CommandHistory = append(s.CommandHistory, line)
+	if len(s.CommandHistory) > maxHistoryLen {
+		s.CommandHistory = s.CommandHistory[len(s.CommandHistory)-maxHistoryLen:]
+	}
+	return SaveState(statePath, s)
+}
+
+// LoadState reads the state JSON file.
+// A missing file returns an empty State (not an error).
+func LoadState(path string) (State, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return State{}, nil
+		}
+		return State{}, fmt.Errorf("reading state %s: %w", path, err)
+	}
+	var s State
+	if err := json.Unmarshal(data, &s); err != nil {
+		return State{}, fmt.Errorf("parsing state %s: %w", path, err)
+	}
+	return s, nil
+}
+
+// SaveState atomically writes the state JSON file, creating parent dirs as needed.
+func SaveState(path string, s State) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("creating state dir: %w", err)
+	}
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// SaveInstanceState writes the instance selections to state.Instance before
+// the cluster is started. StartedAt is left empty until MarkActive is called.
+func SaveInstanceState(statePath string, inst InstanceState) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.Instance = &inst
+	return SaveState(statePath, s)
+}
+
+// MarkActive stamps state.Instance.StartedAt with the current time.
+// If state.Instance is nil (e.g. file-wizard path that skipped SaveInstanceState)
+// it creates a new InstanceState first.
+func MarkActive(statePath string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	if s.Instance == nil {
+		s.Instance = &InstanceState{}
+	}
+	s.Instance.StartedAt = time.Now().UTC().Format(time.RFC3339)
+	return SaveState(statePath, s)
+}
+
+// MarkInactive clears the running instance from state.
+func MarkInactive(statePath string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.Instance = nil
+	return SaveState(statePath, s)
+}
+
+// SaveMFEPGID persists the MFE process group ID into the running instance state.
+func SaveMFEPGID(statePath string, pgid int) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	if s.Instance == nil {
+		s.Instance = &InstanceState{}
+	}
+	s.Instance.MFEPGID = pgid
+	return SaveState(statePath, s)
+}
+
+// SaveTheme persists the chosen theme name to the state file.
+func SaveTheme(statePath, themeName string) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	s.Theme = themeName
+	return SaveState(statePath, s)
+}

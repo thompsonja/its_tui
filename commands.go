@@ -3,35 +3,83 @@ package tui
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
+	"tui/step"
 )
 
-// startParams carries the configured steps needed to boot an instance.
-// skaffold and mfe are nil when not configured for this instance.
-type startParams struct {
-	minikube *MinikubeStep
-	skaffold *SkaffoldStep // nil if no skaffold configured
-	mfe      *MFEStep      // nil if no MFE configured
-}
-
-// switchToInstance cancels the current instance context, sets the new instance
-// name, clears stale panel content, and starts fresh watchers.
+// switchToInstance cancels the current instance context, clears panel content,
+// and sets the new instance name. Callers are responsible for calling
+// registerPipeline and starting watchers / executeStart as needed.
 func (m *model) switchToInstance(name string) {
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
 	m.instance.Name = name
-	m.minikubeBuf = nil
-	m.minikubeLogBuf = nil
-	m.skaffoldBuf = nil
-	m.minikubeVP.SetContent("")
-	m.skaffoldVP.SetContent("")
-	ctx := instanceCtx
-	go watchKubectl(ctx, name)
-	go watchStep(ctx, &MinikubeStep{}, name)
-	go watchStep(ctx, &SkaffoldStep{}, name)
-	go watchStep(ctx, &MFEStep{}, name)
-	go SetCurrentInstance(m.statePath, name) //nolint:errcheck
+	// Clear panel buffers (defs are reset by a subsequent registerPipeline call).
+	for i := range m.panels {
+		for j := range m.panels[i].bufs {
+			m.panels[i].bufs[j] = nil
+		}
+		m.panels[i].activeIdx = 0
+	}
+	for i := range m.panelVPs {
+		m.panelVPs[i].SetContent("")
+	}
+}
+
+// buildPipelineFromState reconstructs the step graph from a saved InstanceState,
+// used when restoring a previously-running instance after a restart.
+func (m *model) buildPipelineFromState(instanceName string, inst *InstanceState) []StepDef {
+	sp := m.statePath
+	cpu := inst.CPU
+	if cpu == "" {
+		cpu = "4"
+	}
+	ram := inst.RAM
+	if ram == "" {
+		ram = "4g"
+	}
+	mode := inst.Mode
+	if mode == "" {
+		mode = "dev"
+	}
+
+	defs := []StepDef{
+		{
+			Step:  &MinikubeStep{CPU: cpu, RAM: ram},
+			Panel: PanelTopLeft,
+			Label: "Minikube",
+		},
+		{
+			Step:         &KubectlStep{},
+			Panel:        PanelTopLeft,
+			Label:        "kubectl",
+			WaitFor:      "minikube",
+			AutoActivate: true,
+			Hidden:       true,
+			OnReady:      func() { _ = MarkActive(sp) },
+		},
+	}
+
+	if m.cfg.GenerateSkaffold != nil {
+		if path, err := m.cfg.GenerateSkaffold(inst.Components); err == nil && path != "" {
+			defs = append(defs, StepDef{
+				Step:    &SkaffoldStep{Path: path, Mode: mode},
+				Panel:   PanelTopRight,
+				Label:   "Skaffold",
+				WaitFor: "minikube",
+			})
+		}
+	}
+
+	if mfeCmd := m.cfg.mfeCommand(inst.MFE); mfeCmd.Cmd != "" {
+		defs = append(defs, StepDef{
+			Step:  &MFEStep{Cmd: mfeCmd},
+			Panel: PanelBottomRight,
+			Label: "MFE",
+		})
+	}
+
+	return defs
 }
 
 // dispatchCommand routes typed text to internal command handlers.
@@ -46,48 +94,6 @@ func (m *model) dispatchCommand(line string) {
 	case "help":
 		m.overlay = overlayHelp
 		m.flipTarget = 1.0
-
-	case "list":
-		m.printLine("$ list")
-		state, _ := LoadState(m.statePath)
-		nameSet := map[string]bool{}
-		for n := range m.configs {
-			nameSet[n] = true
-		}
-		for n := range state.Instances {
-			nameSet[n] = true
-		}
-		if len(nameSet) == 0 {
-			m.printLine("  no instances configured")
-			m.printLine("  create " + DefaultConfigPath() + " to get started")
-		} else {
-			names := make([]string, 0, len(nameSet))
-			for n := range nameSet {
-				names = append(names, n)
-			}
-			sort.Strings(names)
-			for _, n := range names {
-				marker := "○"
-				if _, active := state.Instances[n]; active {
-					marker = "●"
-				}
-				suffix := ""
-				if n == m.instance.Name {
-					suffix = "  ← current"
-				}
-				m.printLine(fmt.Sprintf("  %s  %s%s", marker, n, suffix))
-			}
-		}
-
-	case "use":
-		m.printLine("$ " + line)
-		if len(parts) < 2 {
-			m.printLine("  usage: use <instance-name>")
-		} else {
-			m.switchToInstance(parts[1])
-			m.printLine("  using: " + parts[1])
-			m.fullscreenTarget = 0
-		}
 
 	case "start":
 		m.overlay = overlayWizard
@@ -105,29 +111,28 @@ func (m *model) dispatchCommand(line string) {
 		cancelInstance()
 		instanceCtx, cancelInstance = context.WithCancel(context.Background())
 		m.instance.Name = ""
-		delete(m.configs, name)
-		m.minikubeBuf = nil
-		m.minikubeLogBuf = nil
-		m.skaffoldBuf = nil
-		m.minikubeShowLog = true
-		m.minikubeVP.SetContent("")
-		m.skaffoldVP.SetContent("")
+		// Clear panel bufs (keep defs so stop output routes correctly).
+		for i := range m.panels {
+			for j := range m.panels[i].bufs {
+				m.panels[i].bufs[j] = nil
+			}
+			m.panels[i].activeIdx = 0
+		}
+		for i := range m.panelVPs {
+			m.panelVPs[i].SetContent("")
+		}
 		m.startStep("mfe-stop", "stopping MFE")
 		m.startStep("cluster-delete", "deleting cluster")
-		sp := m.statePath
 		go func() {
 			prog.Send(cmdActiveMsg(+1))
-			if state, err := LoadState(sp); err == nil {
-				if inst, ok := state.Instances[name]; ok {
-					killProcessGroup(inst.MFEPGID)
-				}
+			if state, err := LoadState(sp); err == nil && state.Instance != nil {
+				step.KillProcessGroup(state.Instance.MFEPGID)
 			}
 			prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
 			(&MinikubeStep{}).Stop(context.Background(), name)
 			prog.Send(stepDoneMsg{id: "cluster-delete", ok: true, label: "cluster deleted"})
 			prog.Send(cmdActiveMsg(-1))
-			_ = MarkInactive(sp, name)
-			_ = SetCurrentInstance(sp, "")
+			_ = MarkInactive(sp)
 			prog.Send(instanceStoppedMsg{})
 		}()
 
@@ -137,8 +142,13 @@ func (m *model) dispatchCommand(line string) {
 			m.printLine("  no active instance")
 		} else {
 			name := m.instance.Name
-			for _, s := range []Step{&MinikubeStep{}, &SkaffoldStep{}, &MFEStep{}} {
-				m.printLine(fmt.Sprintf("  %-10s %s", s.ID()+":", s.LogPath(name)))
+			for _, pv := range m.panels {
+				for _, def := range pv.defs {
+					lp := def.Step.LogPath(name)
+					if lp != "" {
+						m.printLine(fmt.Sprintf("  %-10s %s", def.Step.ID()+":", lp))
+					}
+				}
 			}
 		}
 
@@ -155,7 +165,6 @@ func (m *model) dispatchCommand(line string) {
 					m.helpOverlayVP.SetContent(helpContent(m.helpOverlayVP.Width))
 					m.printLine("theme set to: " + name)
 					found = true
-					sp := m.statePath
 					go func() { _ = SaveTheme(sp, name) }()
 					break
 				}
@@ -172,31 +181,30 @@ func (m *model) dispatchCommand(line string) {
 }
 
 func (m *model) executeStartFromWizard() {
-	if m.wizard != nil && m.wizard.screen == wizScreenCustom {
-		m.executeStartFromCustomWizard()
-		return
-	}
-	m.executeStartFromFileWizard()
-}
-
-func (m *model) executeStartFromCustomWizard() {
 	wiz := m.wizard
-	name := strings.TrimSpace(wiz.custName.Value())
-	if name == "" {
-		name = wiz.custName.Placeholder
-	}
-	if name == "" {
-		name = "instance"
-	}
-
+	name := m.instanceName()
 	cpu := cpuOptions[wiz.cpuIdx]
 	ram := ramOptions[wiz.ramIdx]
-	mode := skaffoldModes[wiz.custModeIdx]
+	mode := skaffoldModes[wiz.modeIdx]
+	sp := m.statePath
 
-	minikube := &MinikubeStep{CPU: cpu, RAM: ram}
+	defs := []StepDef{
+		{
+			Step:  &MinikubeStep{CPU: cpu, RAM: ram},
+			Panel: PanelTopLeft,
+			Label: "Minikube",
+		},
+		{
+			Step:         &KubectlStep{},
+			Panel:        PanelTopLeft,
+			Label:        "kubectl",
+			WaitFor:      "minikube",
+			AutoActivate: true,
+			Hidden:       true,
+			OnReady:      func() { _ = MarkActive(sp) },
+		},
+	}
 
-	// Resolve the skaffold path via the GenerateSkaffold callback.
-	var skaffold *SkaffoldStep
 	if m.cfg.GenerateSkaffold != nil {
 		path, err := m.cfg.GenerateSkaffold(wiz.selectedComps)
 		if err != nil {
@@ -204,150 +212,113 @@ func (m *model) executeStartFromCustomWizard() {
 			return
 		}
 		if path != "" {
-			skaffold = &SkaffoldStep{Path: path, Mode: mode}
+			defs = append(defs, StepDef{
+				Step:    &SkaffoldStep{Path: path, Mode: mode},
+				Panel:   PanelTopRight,
+				Label:   "Skaffold",
+				WaitFor: "minikube",
+			})
 		}
 	}
 
-	var mfe *MFEStep
 	if mfeCmd := m.cfg.mfeCommand(wiz.selectedMFE); mfeCmd.Cmd != "" {
-		mfe = &MFEStep{Cmd: mfeCmd}
+		defs = append(defs, StepDef{
+			Step:  &MFEStep{Cmd: mfeCmd},
+			Panel: PanelBottomRight,
+			Label: "MFE",
+		})
 	}
 
-	// Persist the wizard selections.
-	sel := CustomInstanceConfig{
-		Instance:   name,
-		CPU:        cpu,
-		RAM:        ram,
-		Components: wiz.selectedComps,
-		MFE:        wiz.selectedMFE,
-		Mode:       mode,
-	}
-	sp := m.statePath
+	// Persist wizard selections.
 	go func() {
-		if err := WriteCustomConfig(sp, name, sel); err != nil {
-			prog.Send(commandLineMsg("warning: could not save selections: " + err.Error()))
-		} else {
-			prog.Send(commandLineMsg("selections saved"))
-		}
+		_ = SaveInstanceState(sp, InstanceState{
+			CPU:        cpu,
+			RAM:        ram,
+			Components: wiz.selectedComps,
+			MFE:        wiz.selectedMFE,
+			Mode:       mode,
+		})
 	}()
 
 	m.switchToInstance(name)
+	m.registerPipeline(defs)
 	m.fullscreenTarget = 0
-	m.executeStart(startParams{minikube: minikube, skaffold: skaffold, mfe: mfe})
+	ctx := instanceCtx
+	for _, def := range defs {
+		go watchStep(ctx, def, name)
+	}
+	m.executeStart(defs)
 }
 
-// executeStartFromFileWizard reads wizard fields, switches the active instance,
-// restarts watchers, and calls executeStart.
-func (m *model) executeStartFromFileWizard() {
-	wiz := m.wizard
-	name := strings.TrimSpace(wiz.nameInput.Value())
-	if name == "" {
-		name = wiz.nameInput.Placeholder
-	}
-	if name == "" {
-		name = "instance"
+// executeStart launches all step processes with dependency ordering.
+// Steps with WaitFor set block until their dependency signals ready.
+func (m *model) executeStart(defs []StepDef) {
+	m.steps = map[string]*commandStep{}
+	name := m.instance.Name
+
+	// Build a ready channel for each step.
+	ready := make(map[string]chan struct{}, len(defs))
+	for _, def := range defs {
+		ready[def.Step.ID()] = make(chan struct{})
 	}
 
-	configPath := strings.TrimSpace(wiz.configInput.Value())
-	mode := skaffoldModes[wiz.modeIdx]
-
-	// Load the chosen config file.
-	var instanceCfg InstanceConfig
-	if configPath != "" {
-		if configs, err := LoadConfigs(configPath); err != nil {
-			m.commandsBuf = appendLine(m.commandsBuf, "config error: "+err.Error())
-			m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-			m.commandsVP.GotoBottom()
+	// Register visible steps in the commands panel tracker.
+	for _, def := range defs {
+		if def.Hidden {
+			continue
+		}
+		label := def.effectiveLabel()
+		if def.WaitFor == "" {
+			m.startStep(def.Step.ID(), label)
 		} else {
-			m.configs = configs
-			var ok bool
-			instanceCfg, ok = configs[name]
-			if !ok && len(configs) > 0 {
-				cfgNames := make([]string, 0, len(configs))
-				for n := range configs {
-					cfgNames = append(cfgNames, n)
-				}
-				sort.Strings(cfgNames)
-				instanceCfg = configs[cfgNames[0]]
-			}
+			m.startPendingStep(def.Step.ID(), label+" (waiting for "+def.WaitFor+")")
 		}
 	}
 
-	// Populate each step from the loaded config (defaults applied first).
-	minikube := &MinikubeStep{CPU: "4", RAM: "4g"}
-	minikube.ReadConfig(instanceCfg)
-
-	var skaffold *SkaffoldStep
-	if instanceCfg.Skaffold.Path != "" {
-		skaffold = &SkaffoldStep{Mode: mode}
-		skaffold.ReadConfig(instanceCfg)
-	}
-
-	var mfe *MFEStep
-	if instanceCfg.MFE.Path != "" {
-		mfe = &MFEStep{}
-		mfe.ReadConfig(instanceCfg)
-	}
-
-	m.switchToInstance(name)
-	m.fullscreenTarget = 0
-	m.executeStart(startParams{minikube: minikube, skaffold: skaffold, mfe: mfe})
-}
-
-// executeStart launches all instance processes:
-//   - MFE starts immediately (no dependency on minikube).
-//   - minikube start runs (output → /tmp log, visible in the Minikube panel).
-//   - skaffold starts once minikube completes.
-func (m *model) executeStart(p startParams) {
-	m.steps = map[string]*commandStep{}
-	m.minikubeShowLog = true
-	m.minikubeAutoSwitched = false
-	m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
-
-	name := m.instance.Name
-	sp := m.statePath
-
-	m.startStep(p.minikube.ID(), "starting minikube")
-	if p.skaffold != nil {
-		m.startPendingStep(p.skaffold.ID(), "skaffold (waiting for minikube)")
-	}
-	if p.mfe != nil {
-		mfe := p.mfe
-		m.startStep(mfe.ID(), "starting MFE")
+	ctx := instanceCtx
+	for _, def := range defs {
+		def := def
 		go func() {
-			if err := mfe.Start(instanceCtx, name); err != nil {
-				prog.Send(stepDoneMsg{id: mfe.ID(), ok: false, label: "MFE failed to start"})
+			// Wait for dependency if any.
+			if def.WaitFor != "" {
+				if ch, ok := ready[def.WaitFor]; ok {
+					select {
+					case <-ch:
+					case <-ctx.Done():
+						return
+					}
+				}
+				// Activate this step (triggers spinner + AutoActivate if set).
+				prog.Send(stepActivateMsg{id: def.Step.ID()})
+			}
+
+			// Start the step.
+			if err := def.Step.Start(ctx, name); err != nil {
+				if !def.Hidden {
+					prog.Send(stepDoneMsg{
+						id:    def.Step.ID(),
+						ok:    false,
+						label: def.effectiveLabel() + " failed: " + err.Error(),
+					})
+				}
 				return
 			}
-			prog.Send(stepDoneMsg{id: mfe.ID(), ok: true, label: "MFE running"})
+
+			// Signal ready to unblock any dependents.
+			close(ready[def.Step.ID()])
+
+			// Invoke the OnReady callback.
+			if def.OnReady != nil {
+				go def.OnReady()
+			}
+
+			if !def.Hidden {
+				prog.Send(stepDoneMsg{
+					id:    def.Step.ID(),
+					ok:    true,
+					label: def.effectiveLabel() + " running",
+				})
+			}
 		}()
 	}
-
-	minikube := p.minikube
-	skaffold := p.skaffold
-	go func() {
-		prog.Send(cmdActiveMsg(+1))
-		if err := minikube.Start(instanceCtx, name); err != nil {
-			prog.Send(stepDoneMsg{id: minikube.ID(), ok: false, label: "minikube failed: " + err.Error()})
-			prog.Send(cmdActiveMsg(-1))
-			return
-		}
-		_ = MarkActive(sp, name)
-		prog.Send(stepDoneMsg{id: minikube.ID(), ok: true, label: "minikube ready"})
-		if minikube.IsReady(instanceCtx, name) {
-			prog.Send(minikubeReadyMsg{})
-		}
-		if skaffold != nil {
-			prog.Send(stepActivateMsg{id: skaffold.ID()})
-			go func() {
-				if err := skaffold.Start(instanceCtx, name); err != nil {
-					prog.Send(stepDoneMsg{id: skaffold.ID(), ok: false, label: "skaffold failed to start"})
-					return
-				}
-				prog.Send(stepDoneMsg{id: skaffold.ID(), ok: true, label: "skaffold running"})
-			}()
-		}
-		prog.Send(cmdActiveMsg(-1))
-	}()
 }
-

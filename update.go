@@ -3,6 +3,7 @@ package tui
 import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"tui/step"
 )
 
 // flipStep controls animation speed: how much flipProgress advances per 60fps tick.
@@ -84,39 +85,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// ── Streaming log ingestion ──────────────────────────────────────────────
 
-	case minikubeLineMsg:
-		m.minikubeLogBuf = appendLine(m.minikubeLogBuf, string(msg))
-		if m.minikubeShowLog {
-			m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
-			m.minikubeVP.GotoBottom()
+	case step.LineMsg:
+		pid, idx := m.panelAndIdx(msg.ID)
+		if idx >= 0 {
+			pv := &m.panels[pid]
+			pv.bufs[idx] = appendLine(pv.bufs[idx], msg.Line)
+			if pv.activeIdx == idx {
+				vp := &m.panelVPs[pid]
+				vp.SetContent(wrapContent(pv.bufs[idx], vp.Width))
+				vp.GotoBottom()
+			}
 		}
 
-	case minikubeSetMsg:
-		m.minikubeBuf = []string(msg)
-		if !m.minikubeShowLog {
-			m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
+	case step.SetMsg:
+		pid, idx := m.panelAndIdx(msg.ID)
+		if idx >= 0 {
+			pv := &m.panels[pid]
+			pv.bufs[idx] = msg.Content
+			if pv.activeIdx == idx {
+				vp := &m.panelVPs[pid]
+				vp.SetContent(wrapContent(pv.bufs[idx], vp.Width))
+			}
 		}
-
-	case minikubeReadyMsg:
-		if !m.minikubeAutoSwitched {
-			m.minikubeAutoSwitched = true
-			m.minikubeShowLog = false
-			m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
-		}
-
-	case skaffoldLineMsg:
-		appendToVP(&m.skaffoldBuf, &m.skaffoldVP, string(msg))
 
 	case commandLineMsg:
 		appendToVP(&m.commandsBuf, &m.commandsVP, string(msg))
 
-	case mfeLineMsg:
-		appendToVP(&m.mfeBuf, &m.mfeVP, string(msg))
+	case step.CommandMsg:
+		appendToVP(&m.commandsBuf, &m.commandsVP, msg.Text)
 
-	case mfePIDMsg:
-		sp, name := m.statePath, m.instance.Name
-		pgid := int(msg)
-		go func() { _ = SaveMFEPGID(sp, name, pgid) }()
+	case step.PIDMsg:
+		sp := m.statePath
+		pgid := msg.PID
+		go func() { _ = SaveMFEPGID(sp, pgid) }()
 
 	case stepDoneMsg:
 		m.finishStep(msg.id, msg.ok, msg.label)
@@ -130,6 +131,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.commandsBuf[s.bufIdx] = "  " + frames[m.spinnerTick%len(frames)] + " " + s.label
 			}
 			m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
+		}
+		// AutoActivate: switch the panel view to show this step.
+		if def, ok := m.findDef(msg.id); ok && def.AutoActivate {
+			pid, idx := m.panelAndIdx(msg.id)
+			if idx >= 0 {
+				pv := &m.panels[pid]
+				pv.activeIdx = idx
+				m.panelVPs[pid].SetContent(wrapContent(pv.bufs[idx], m.panelVPs[pid].Width))
+			}
 		}
 
 	case instanceStoppedMsg:
@@ -209,20 +219,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			var cmd tea.Cmd
 			switch m.focused {
-			case panelMinikube:
-				if msg.String() == "t" {
-					m.minikubeShowLog = !m.minikubeShowLog
-					if m.minikubeShowLog {
-						m.minikubeVP.SetContent(wrapContent(m.minikubeLogBuf, m.minikubeVP.Width))
-						m.minikubeVP.GotoBottom()
-					} else {
-						m.minikubeVP.SetContent(wrapContent(m.minikubeBuf, m.minikubeVP.Width))
-					}
-				} else {
-					m.minikubeVP, cmd = m.minikubeVP.Update(msg)
-				}
-			case panelSkaffold:
-				m.skaffoldVP, cmd = m.skaffoldVP.Update(msg)
 			case panelCommands:
 				if m.flipTarget == 1.0 {
 					switch m.overlay {
@@ -244,8 +240,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.input, cmd = m.input.Update(msg)
 				}
-			case panelMFE:
-				m.mfeVP, cmd = m.mfeVP.Update(msg)
+			default: // content panels: panelMinikube, panelSkaffold, panelMFE
+				pid, ok := m.focusedPanelID()
+				if !ok {
+					break
+				}
+				pv := &m.panels[pid]
+				if msg.String() == "t" && len(pv.defs) > 1 {
+					pv.activeIdx = (pv.activeIdx + 1) % len(pv.defs)
+					buf := pv.bufs[pv.activeIdx]
+					m.panelVPs[pid].SetContent(wrapContent(buf, m.panelVPs[pid].Width))
+					m.panelVPs[pid].GotoBottom()
+				} else {
+					m.panelVPs[pid], cmd = m.panelVPs[pid].Update(msg)
+				}
 			}
 			cmds = append(cmds, cmd)
 		}
@@ -259,7 +267,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) printLine(s string) {
 	appendToVP(&m.commandsBuf, &m.commandsVP, s)
 }
-
 
 func (m *model) cycleFocus(d int) {
 	m.focused = (m.focused + d + numPanels) % numPanels
@@ -303,35 +310,41 @@ func (m *model) resizePanels() {
 		vpH_overlay = max(1, rowB-border-title)
 	}
 
-	type vpSpec struct {
-		vp  *viewport.Model
-		buf *[]string
+	type contentSpec struct {
+		pid  PanelID
 		w, h int
 	}
-	minikubeBufPtr := &m.minikubeBuf
-	if m.minikubeShowLog {
-		minikubeBufPtr = &m.minikubeLogBuf
+	contentSpecs := []contentSpec{
+		{PanelTopLeft, vpW_L, vpH_top},
+		{PanelTopRight, vpW_R, vpH_top},
+		{PanelBottomRight, vpW_R, vpH_mfe},
 	}
-	specs := []vpSpec{
-		{&m.minikubeVP, minikubeBufPtr, vpW_L, vpH_top},
-		{&m.skaffoldVP, &m.skaffoldBuf, vpW_R, vpH_top},
-		{&m.commandsVP, &m.commandsBuf, vpW_L, vpH_commands},
-		{&m.mfeVP, &m.mfeBuf, vpW_R, vpH_mfe},
-	}
-	if m.minikubeVP.Width == 0 {
-		for _, s := range specs {
-			*s.vp = viewport.New(s.w, s.h)
-			s.vp.SetContent(wrapContent(*s.buf, s.w))
-			s.vp.GotoBottom()
+
+	firstTime := m.panelVPs[0].Width == 0
+	if firstTime {
+		for _, s := range contentSpecs {
+			pv := &m.panels[s.pid]
+			m.panelVPs[s.pid] = viewport.New(s.w, s.h)
+			m.panelVPs[s.pid].SetContent(wrapContent(pv.activeBuf(), s.w))
+			m.panelVPs[s.pid].GotoBottom()
 		}
+		m.commandsVP = viewport.New(vpW_L, vpH_commands)
+		m.commandsVP.SetContent(wrapContent(m.commandsBuf, vpW_L))
+		m.commandsVP.GotoBottom()
 		m.helpOverlayVP = viewport.New(vpW_L, vpH_overlay)
 	} else {
-		for _, s := range specs {
-			s.vp.Width = s.w
-			s.vp.Height = s.h
-			s.vp.SetContent(wrapContent(*s.buf, s.w))
-			s.vp.GotoBottom()
+		for _, s := range contentSpecs {
+			pv := &m.panels[s.pid]
+			vp := &m.panelVPs[s.pid]
+			vp.Width = s.w
+			vp.Height = s.h
+			vp.SetContent(wrapContent(pv.activeBuf(), s.w))
+			vp.GotoBottom()
 		}
+		m.commandsVP.Width = vpW_L
+		m.commandsVP.Height = vpH_commands
+		m.commandsVP.SetContent(wrapContent(m.commandsBuf, vpW_L))
+		m.commandsVP.GotoBottom()
 		m.helpOverlayVP.Width = vpW_L
 		m.helpOverlayVP.Height = vpH_overlay
 	}
@@ -340,9 +353,6 @@ func (m *model) resizePanels() {
 
 	if m.wizard != nil {
 		inputW := max(20, vpW_L-16)
-		m.wizard.nameInput.Width = inputW
-		m.wizard.configInput.Width = inputW
-		m.wizard.custName.Width = inputW
 		m.wizard.compPickerSearch.Width = inputW
 		m.wizard.mfePickerSearch.Width = inputW
 	}

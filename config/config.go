@@ -1,10 +1,9 @@
-package tui
+package config
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 
 	"gopkg.in/yaml.v3"
@@ -80,7 +79,6 @@ type System struct {
 }
 
 // ComponentsFile is the top-level structure of a components JSON file.
-// Use LoadComponents to parse it.
 type ComponentsFile struct {
 	Systems []System `json:"systems"`
 }
@@ -102,50 +100,3 @@ func LoadComponents(path string) (ComponentsFile, error) {
 	return cf, nil
 }
 
-// ── Custom instance config ────────────────────────────────────────────────────
-
-// CustomInstanceConfig holds the selections made in the custom-instance wizard.
-type CustomInstanceConfig struct {
-	Instance   string   `json:"instance"`
-	CPU        string   `json:"cpu"`
-	RAM        string   `json:"ram"`
-	Components []string `json:"components"`
-	MFE        string   `json:"mfe,omitempty"`
-	Mode       string   `json:"mode"`
-}
-
-// WriteCustomConfig saves selections alongside the state file as
-// <stateDir>/<instanceName>_selections.json.
-func WriteCustomConfig(statePath, instanceName string, cfg CustomInstanceConfig) error {
-	dir := filepath.Dir(statePath)
-	path := filepath.Join(dir, instanceName+"_selections.json")
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
-}
-
-// skaffoldLogPath returns the per-instance log file written by skaffold dev.
-func skaffoldLogPath(instanceName string) string {
-	if instanceName == "" {
-		return ""
-	}
-	return fmt.Sprintf("/tmp/skaffold_%s.log", instanceName)
-}
-
-// minikubeLogPath returns the per-instance log file written by minikube start.
-func minikubeLogPath(instanceName string) string {
-	if instanceName == "" {
-		return ""
-	}
-	return fmt.Sprintf("/tmp/minikube_%s.log", instanceName)
-}
-
-// mfeLogPath returns the per-instance log file written by the MFE process.
-func mfeLogPath(instanceName string) string {
-	if instanceName == "" {
-		return ""
-	}
-	return fmt.Sprintf("/tmp/mfe_%s.log", instanceName)
-}

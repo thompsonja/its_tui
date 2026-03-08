@@ -7,145 +7,6 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 	if wiz == nil {
 		return
 	}
-	switch wiz.screen {
-	case wizScreenSelect:
-		m.handleWizardKeySelect(msg)
-	case wizScreenFile:
-		m.handleWizardKeyFile(msg)
-	case wizScreenCustom:
-		m.handleWizardKeyCustom(msg)
-	}
-}
-
-func (m *model) handleWizardKeySelect(msg tea.KeyMsg) {
-	wiz := m.wizard
-	switch msg.String() {
-	case "up":
-		if wiz.screenIdx > 0 {
-			wiz.screenIdx--
-		}
-	case "down":
-		if wiz.screenIdx < 1 {
-			wiz.screenIdx++
-		}
-	case "enter":
-		if wiz.screenIdx == 0 {
-			wiz.screen = wizScreenFile
-		} else {
-			wiz.screen = wizScreenCustom
-		}
-		wiz.syncFocus()
-	}
-}
-
-func (m *model) handleWizardKeyFile(msg tea.KeyMsg) {
-	wiz := m.wizard
-	key := msg.String()
-
-	switch key {
-	case "tab":
-		wiz.field = (wiz.field + 1) % wizNumFields
-		wiz.syncFocus()
-		return
-	case "shift+tab":
-		wiz.field = (wiz.field - 1 + wizNumFields) % wizNumFields
-		wiz.syncFocus()
-		return
-	}
-
-	switch wiz.field {
-	case wizFieldName:
-		switch key {
-		case "down", "enter":
-			wiz.field = wizFieldConfig
-			wiz.syncFocus()
-		case "up":
-			wiz.field = wizFieldButtons
-			wiz.syncFocus()
-		default:
-			wiz.nameInput, _ = wiz.nameInput.Update(msg)
-		}
-
-	case wizFieldConfig:
-		switch key {
-		case "up":
-			if len(wiz.browseFiles) > 0 && wiz.browseIdx > 0 {
-				wiz.browseIdx--
-				wiz.configInput.SetValue(wiz.browseFiles[wiz.browseIdx])
-			} else {
-				wiz.field = wizFieldName
-				wiz.syncFocus()
-			}
-		case "down":
-			if len(wiz.browseFiles) > 0 && wiz.browseIdx < len(wiz.browseFiles)-1 {
-				wiz.browseIdx++
-				wiz.configInput.SetValue(wiz.browseFiles[wiz.browseIdx])
-			} else {
-				wiz.field = wizFieldMode
-				wiz.syncFocus()
-			}
-		case "enter":
-			if len(wiz.browseFiles) > 0 {
-				wiz.configInput.SetValue(wiz.browseFiles[wiz.browseIdx])
-			}
-			wiz.field = wizFieldMode
-			wiz.syncFocus()
-		default:
-			wiz.configInput, _ = wiz.configInput.Update(msg)
-			v := wiz.configInput.Value()
-			for i, f := range wiz.browseFiles {
-				if f == v {
-					wiz.browseIdx = i
-					break
-				}
-			}
-		}
-
-	case wizFieldMode:
-		switch key {
-		case "left":
-			if wiz.modeIdx > 0 {
-				wiz.modeIdx--
-			}
-		case "right":
-			if wiz.modeIdx < len(skaffoldModes)-1 {
-				wiz.modeIdx++
-			}
-		case "up":
-			wiz.field = wizFieldConfig
-			wiz.syncFocus()
-		case "down", "enter":
-			wiz.field = wizFieldButtons
-			wiz.syncFocus()
-		}
-
-	case wizFieldButtons:
-		switch key {
-		case "left":
-			if wiz.confirmIdx > 0 {
-				wiz.confirmIdx--
-			}
-		case "right":
-			if wiz.confirmIdx < 1 {
-				wiz.confirmIdx++
-			}
-		case "up":
-			wiz.field = wizFieldMode
-			wiz.syncFocus()
-		case "down":
-			wiz.field = wizFieldName
-			wiz.syncFocus()
-		case "enter":
-			if wiz.confirmIdx == 0 {
-				m.executeStartFromWizard()
-			}
-			m.flipTarget = 0.0
-		}
-	}
-}
-
-func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
-	wiz := m.wizard
 	key := msg.String()
 
 	// Tab/Shift+Tab: cycle fields when pickers are closed; close picker when open.
@@ -158,9 +19,9 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			wiz.mfePickerOpen = false
 			wiz.syncFocus()
 		} else {
-			wiz.custField = (wiz.custField + 1) % custNumFields
-			if wiz.custField == custFieldComponents {
-				wiz.custSelectedIdx = 0
+			wiz.field = (wiz.field + 1) % wizNumFields
+			if wiz.field == wizFieldComponents {
+				wiz.selectedIdx = 0
 			}
 			wiz.syncFocus()
 		}
@@ -173,29 +34,17 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			wiz.mfePickerOpen = false
 			wiz.syncFocus()
 		} else {
-			wiz.custField = (wiz.custField - 1 + custNumFields) % custNumFields
-			if wiz.custField == custFieldComponents {
-				wiz.custSelectedIdx = len(wiz.selectedComps)
+			wiz.field = (wiz.field - 1 + wizNumFields) % wizNumFields
+			if wiz.field == wizFieldComponents {
+				wiz.selectedIdx = len(wiz.selectedComps)
 			}
 			wiz.syncFocus()
 		}
 		return
 	}
 
-	switch wiz.custField {
-	case custFieldName:
-		switch key {
-		case "down", "enter":
-			wiz.custField = custFieldCPU
-			wiz.syncFocus()
-		case "up":
-			wiz.custField = custFieldButtons
-			wiz.syncFocus()
-		default:
-			wiz.custName, _ = wiz.custName.Update(msg)
-		}
-
-	case custFieldCPU:
+	switch wiz.field {
+	case wizFieldCPU:
 		switch key {
 		case "left":
 			if wiz.cpuIdx > 0 {
@@ -206,14 +55,14 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 				wiz.cpuIdx++
 			}
 		case "up":
-			wiz.custField = custFieldName
+			wiz.field = wizFieldButtons
 			wiz.syncFocus()
 		case "down", "enter":
-			wiz.custField = custFieldRAM
+			wiz.field = wizFieldRAM
 			wiz.syncFocus()
 		}
 
-	case custFieldRAM:
+	case wizFieldRAM:
 		switch key {
 		case "left":
 			if wiz.ramIdx > 0 {
@@ -224,15 +73,15 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 				wiz.ramIdx++
 			}
 		case "up":
-			wiz.custField = custFieldCPU
+			wiz.field = wizFieldCPU
 			wiz.syncFocus()
 		case "down", "enter":
-			wiz.custField = custFieldComponents
-			wiz.custSelectedIdx = 0
+			wiz.field = wizFieldComponents
+			wiz.selectedIdx = 0
 			wiz.syncFocus()
 		}
 
-	case custFieldComponents:
+	case wizFieldComponents:
 		if wiz.compPickerOpen {
 			switch key {
 			case "up":
@@ -252,24 +101,24 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 		} else {
 			switch key {
 			case "up":
-				if wiz.custSelectedIdx > 0 {
-					wiz.custSelectedIdx--
+				if wiz.selectedIdx > 0 {
+					wiz.selectedIdx--
 				} else {
-					wiz.custField = custFieldRAM
+					wiz.field = wizFieldRAM
 					wiz.syncFocus()
 				}
 			case "down":
-				if wiz.custSelectedIdx < len(wiz.selectedComps) {
-					wiz.custSelectedIdx++
+				if wiz.selectedIdx < len(wiz.selectedComps) {
+					wiz.selectedIdx++
 				} else {
-					wiz.custField = custFieldMFE
+					wiz.field = wizFieldMFE
 					wiz.syncFocus()
 				}
 			case "x":
-				if wiz.custSelectedIdx < len(wiz.selectedComps) {
-					wiz.selectedComps = append(wiz.selectedComps[:wiz.custSelectedIdx], wiz.selectedComps[wiz.custSelectedIdx+1:]...)
-					if wiz.custSelectedIdx > len(wiz.selectedComps) {
-						wiz.custSelectedIdx = len(wiz.selectedComps)
+				if wiz.selectedIdx < len(wiz.selectedComps) {
+					wiz.selectedComps = append(wiz.selectedComps[:wiz.selectedIdx], wiz.selectedComps[wiz.selectedIdx+1:]...)
+					if wiz.selectedIdx > len(wiz.selectedComps) {
+						wiz.selectedIdx = len(wiz.selectedComps)
 					}
 				}
 			case "enter":
@@ -280,7 +129,7 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			}
 		}
 
-	case custFieldMFE:
+	case wizFieldMFE:
 		if wiz.mfePickerOpen {
 			switch key {
 			case "up":
@@ -304,11 +153,11 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 		} else {
 			switch key {
 			case "up":
-				wiz.custField = custFieldComponents
-				wiz.custSelectedIdx = len(wiz.selectedComps)
+				wiz.field = wizFieldComponents
+				wiz.selectedIdx = len(wiz.selectedComps)
 				wiz.syncFocus()
 			case "down":
-				wiz.custField = custFieldMode
+				wiz.field = wizFieldMode
 				wiz.syncFocus()
 			case "enter":
 				if len(wiz.mfeAll) > 0 {
@@ -322,42 +171,42 @@ func (m *model) handleWizardKeyCustom(msg tea.KeyMsg) {
 			}
 		}
 
-	case custFieldMode:
+	case wizFieldMode:
 		switch key {
 		case "left":
-			if wiz.custModeIdx > 0 {
-				wiz.custModeIdx--
+			if wiz.modeIdx > 0 {
+				wiz.modeIdx--
 			}
 		case "right":
-			if wiz.custModeIdx < len(skaffoldModes)-1 {
-				wiz.custModeIdx++
+			if wiz.modeIdx < len(skaffoldModes)-1 {
+				wiz.modeIdx++
 			}
 		case "up":
-			wiz.custField = custFieldMFE
+			wiz.field = wizFieldMFE
 			wiz.syncFocus()
 		case "down", "enter":
-			wiz.custField = custFieldButtons
+			wiz.field = wizFieldButtons
 			wiz.syncFocus()
 		}
 
-	case custFieldButtons:
+	case wizFieldButtons:
 		switch key {
 		case "left":
-			if wiz.custConfirmIdx > 0 {
-				wiz.custConfirmIdx--
+			if wiz.confirmIdx > 0 {
+				wiz.confirmIdx--
 			}
 		case "right":
-			if wiz.custConfirmIdx < 1 {
-				wiz.custConfirmIdx++
+			if wiz.confirmIdx < 1 {
+				wiz.confirmIdx++
 			}
 		case "up":
-			wiz.custField = custFieldMode
+			wiz.field = wizFieldMode
 			wiz.syncFocus()
 		case "down":
-			wiz.custField = custFieldName
+			wiz.field = wizFieldCPU
 			wiz.syncFocus()
 		case "enter":
-			if wiz.custConfirmIdx == 0 {
+			if wiz.confirmIdx == 0 {
 				m.executeStartFromWizard()
 			}
 			m.flipTarget = 0.0

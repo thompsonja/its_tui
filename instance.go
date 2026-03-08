@@ -10,7 +10,7 @@ type Instance struct {
 // Keep it short — it has to fit in one terminal row.
 func (inst Instance) StatusLine() string {
 	if inst.Name == "" {
-		return "no instance selected"
+		return "no instance running"
 	}
 	return inst.Name
 }

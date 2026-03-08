@@ -4,7 +4,7 @@ import "testing"
 
 func TestStatusLine_NoInstance(t *testing.T) {
 	inst := Instance{}
-	if inst.StatusLine() != "no instance selected" {
+	if inst.StatusLine() != "no instance running" {
 		t.Fatalf("unexpected: %q", inst.StatusLine())
 	}
 }

@@ -1,9 +1,8 @@
-package tui
+package config
 
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -102,17 +101,18 @@ func TestLoadState_MissingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing file should not error, got: %v", err)
 	}
-	if s.Instances == nil {
-		t.Fatal("Instances map should be initialized")
+	if s.Instance != nil {
+		t.Fatal("Instance should be nil for missing file")
 	}
 }
 
 func TestSaveAndLoadState_RoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	s := State{
-		Instances:       map[string]ActiveInstance{"foo": {StartedAt: "2026-01-01T00:00:00Z"}},
-		CurrentInstance: "foo",
-		Theme:           "dark",
+		Theme: "dark",
+		Instance: &InstanceState{
+			StartedAt: "2026-01-01T00:00:00Z",
+		},
 	}
 	if err := SaveState(path, s); err != nil {
 		t.Fatalf("SaveState: %v", err)
@@ -121,20 +121,20 @@ func TestSaveAndLoadState_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadState: %v", err)
 	}
-	if got.CurrentInstance != "foo" {
-		t.Fatalf("expected CurrentInstance=foo, got %q", got.CurrentInstance)
+	if got.Instance == nil {
+		t.Fatal("expected Instance to be set")
 	}
 	if got.Theme != "dark" {
 		t.Fatalf("expected Theme=dark, got %q", got.Theme)
 	}
-	if _, ok := got.Instances["foo"]; !ok {
-		t.Fatal("expected instance foo to be present")
+	if got.Instance.StartedAt != "2026-01-01T00:00:00Z" {
+		t.Fatalf("expected StartedAt set, got %q", got.Instance.StartedAt)
 	}
 }
 
 func TestSaveState_CreatesParentDirs(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "a", "b", "state.json")
-	if err := SaveState(path, State{Instances: map[string]ActiveInstance{}}); err != nil {
+	if err := SaveState(path, State{}); err != nil {
 		t.Fatalf("SaveState should create parent dirs: %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
@@ -146,34 +146,27 @@ func TestSaveState_CreatesParentDirs(t *testing.T) {
 
 func TestMarkActive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	if err := MarkActive(path, "myinstance"); err != nil {
+	if err := MarkActive(path); err != nil {
 		t.Fatalf("MarkActive: %v", err)
 	}
 	s, _ := LoadState(path)
-	if _, ok := s.Instances["myinstance"]; !ok {
-		t.Fatal("expected myinstance to be active")
+	if s.Instance == nil {
+		t.Fatal("expected Instance to be set")
 	}
-	if s.Instances["myinstance"].StartedAt == "" {
+	if s.Instance.StartedAt == "" {
 		t.Fatal("expected StartedAt to be set")
 	}
 }
 
 func TestMarkInactive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
-	_ = MarkActive(path, "myinstance")
-	if err := MarkInactive(path, "myinstance"); err != nil {
+	_ = MarkActive(path)
+	if err := MarkInactive(path); err != nil {
 		t.Fatalf("MarkInactive: %v", err)
 	}
 	s, _ := LoadState(path)
-	if _, ok := s.Instances["myinstance"]; ok {
-		t.Fatal("expected myinstance to be gone")
-	}
-}
-
-func TestMarkInactive_NonexistentInstance(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := MarkInactive(path, "ghost"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if s.Instance != nil {
+		t.Fatal("expected Instance=nil after MarkInactive")
 	}
 }
 
@@ -224,57 +217,6 @@ func TestSaveTheme(t *testing.T) {
 	s, _ := LoadState(path)
 	if s.Theme != "catppuccin" {
 		t.Fatalf("expected theme=catppuccin, got %q", s.Theme)
-	}
-}
-
-// ── SetCurrentInstance ────────────────────────────────────────────────────────
-
-func TestSetCurrentInstance(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	if err := SetCurrentInstance(path, "dev"); err != nil {
-		t.Fatalf("SetCurrentInstance: %v", err)
-	}
-	s, _ := LoadState(path)
-	if s.CurrentInstance != "dev" {
-		t.Fatalf("expected dev, got %q", s.CurrentInstance)
-	}
-}
-
-func TestSetCurrentInstance_Clear(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "state.json")
-	_ = SetCurrentInstance(path, "dev")
-	_ = SetCurrentInstance(path, "")
-	s, _ := LoadState(path)
-	if s.CurrentInstance != "" {
-		t.Fatalf("expected empty, got %q", s.CurrentInstance)
-	}
-}
-
-// ── WriteCustomConfig ─────────────────────────────────────────────────────────
-
-func TestWriteCustomConfig(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "state.json")
-	cfg := CustomInstanceConfig{
-		Instance:   "myinst",
-		CPU:        "4",
-		RAM:        "4g",
-		Components: []string{"checkout-backend", "user-bff"},
-		Mode:       "dev",
-	}
-	if err := WriteCustomConfig(statePath, "myinst", cfg); err != nil {
-		t.Fatalf("WriteCustomConfig: %v", err)
-	}
-	outPath := filepath.Join(dir, "myinst_selections.json")
-	data, err := os.ReadFile(outPath)
-	if err != nil {
-		t.Fatalf("selections file not created: %v", err)
-	}
-	content := string(data)
-	for _, want := range []string{"checkout-backend", "user-bff", "\"mode\"", "dev"} {
-		if !strings.Contains(content, want) {
-			t.Errorf("expected %q in output, got:\n%s", want, content)
-		}
 	}
 }
 

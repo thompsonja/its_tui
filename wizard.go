@@ -1,9 +1,6 @@
 package tui
 
 import (
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -15,32 +12,15 @@ var skaffoldModes = []string{"dev", "run", "debug"}
 var cpuOptions = []string{"2", "4", "8", "16"}
 var ramOptions = []string{"2g", "4g", "8g", "16g"}
 
-// Wizard screens.
+// Wizard field indices.
 const (
-	wizScreenSelect = 0 // mode-select: file vs custom
-	wizScreenFile   = 1 // file-based wizard
-	wizScreenCustom = 2 // custom-instance wizard
-)
-
-// File wizard field indices.
-const (
-	wizFieldName    = 0
-	wizFieldConfig  = 1
-	wizFieldMode    = 2
-	wizFieldButtons = 3
-	wizNumFields    = 4
-)
-
-// Custom wizard field indices.
-const (
-	custFieldName       = 0
-	custFieldCPU        = 1
-	custFieldRAM        = 2
-	custFieldComponents = 3
-	custFieldMFE        = 4
-	custFieldMode       = 5
-	custFieldButtons    = 6
-	custNumFields       = 7
+	wizFieldCPU        = 0
+	wizFieldRAM        = 1
+	wizFieldComponents = 2
+	wizFieldMFE        = 3
+	wizFieldMode       = 4
+	wizFieldButtons    = 5
+	wizNumFields       = 6
 )
 
 // pickerItem is one row in the hierarchical component picker: either a system
@@ -52,36 +32,22 @@ type pickerItem struct {
 }
 
 type startWizard struct {
-	screen    int // wizScreenSelect / wizScreenFile / wizScreenCustom
-	screenIdx int // cursor on the mode-select screen (0=file, 1=custom)
+	field      int
+	cpuIdx     int
+	ramIdx     int
+	modeIdx    int
+	confirmIdx int
 
-	// ── File wizard ──────────────────────────────────────────────────────────
-	field       int
-	nameInput   textinput.Model
-	configInput textinput.Model
-	modeIdx     int
-	confirmIdx  int
-	browseFiles []string
-	browseIdx   int
-
-	// ── Custom wizard ─────────────────────────────────────────────────────────
-	custField      int
-	custName       textinput.Model
-	cpuIdx         int
-	ramIdx         int
-	custModeIdx    int
-	custConfirmIdx int
-
-	// ── Component picker (shown when custFieldComponents is active) ───────────
+	// ── Component picker (shown when wizFieldComponents is active) ────────────
 	compAll          []System
 	selectedComps    []string
-	custSelectedIdx  int // highlighted row in collapsed view (0..len-1 = comp, len = Add button)
+	selectedIdx      int // highlighted row in collapsed view (0..len-1 = comp, len = Add button)
 	compPickerOpen   bool
 	compPickerSearch textinput.Model
 	compPickerItems  []pickerItem // filtered view
 	compPickerIdx    int
 
-	// ── MFE picker (shown when custFieldMFE is active) ───────────────────────
+	// ── MFE picker (shown when wizFieldMFE is active) ─────────────────────────
 	mfeAll          []string
 	selectedMFE     string
 	mfePickerOpen   bool
@@ -178,7 +144,6 @@ func (w *startWizard) togglePickerItem(idx int) {
 	}
 	for _, c := range comps {
 		if allSelected {
-			// Remove each one.
 			for i, s := range w.selectedComps {
 				if s == c {
 					w.selectedComps = append(w.selectedComps[:i], w.selectedComps[i+1:]...)
@@ -195,52 +160,6 @@ func (w *startWizard) togglePickerItem(idx int) {
 func newStartWizard(m *model) *startWizard {
 	inputW := max(20, m.commandsVP.Width-16)
 
-	// ── File wizard inputs ────────────────────────────────────────────────────
-	nameIn := textinput.New()
-	nameIn.Placeholder = "instance-name"
-	nameIn.CharLimit = 64
-	nameIn.Width = inputW
-	if m.instance.Name != "" {
-		nameIn.SetValue(m.instance.Name)
-	} else if len(m.configs) > 0 {
-		names := make([]string, 0, len(m.configs))
-		for n := range m.configs {
-			names = append(names, n)
-		}
-		sort.Strings(names)
-		nameIn.SetValue(names[0])
-	}
-
-	cfgIn := textinput.New()
-	cfgIn.Placeholder = DefaultConfigPath()
-	cfgIn.CharLimit = 256
-	cfgIn.Width = inputW
-
-	browseFiles := findYAMLConfigs()
-	browseIdx := 0
-	if _, err := os.Stat(DefaultConfigPath()); err == nil {
-		cfgIn.SetValue(DefaultConfigPath())
-	} else if _, err := os.Stat("config.yaml"); err == nil {
-		cfgIn.SetValue("config.yaml")
-	} else if len(browseFiles) > 0 {
-		cfgIn.SetValue(browseFiles[0])
-	}
-	for i, f := range browseFiles {
-		if f == cfgIn.Value() {
-			browseIdx = i
-			break
-		}
-	}
-
-	// ── Custom wizard inputs ──────────────────────────────────────────────────
-	custNameIn := textinput.New()
-	custNameIn.Placeholder = "instance-name"
-	custNameIn.CharLimit = 64
-	custNameIn.Width = inputW
-	if m.instance.Name != "" {
-		custNameIn.SetValue(m.instance.Name)
-	}
-
 	compSearch := textinput.New()
 	compSearch.Placeholder = "search systems or components…"
 	compSearch.Width = inputW
@@ -250,13 +169,6 @@ func newStartWizard(m *model) *startWizard {
 	mfeSearch.Width = inputW
 
 	wiz := &startWizard{
-		screen:           wizScreenSelect,
-		field:            wizFieldName,
-		nameInput:        nameIn,
-		configInput:      cfgIn,
-		browseFiles:      browseFiles,
-		browseIdx:        browseIdx,
-		custName:         custNameIn,
 		compAll:          m.cfg.Systems,
 		compPickerSearch: compSearch,
 		mfeAll:           m.cfg.MFEs,
@@ -269,60 +181,16 @@ func newStartWizard(m *model) *startWizard {
 
 // syncFocus focuses the active text input and blurs all others.
 func (w *startWizard) syncFocus() {
-	w.nameInput.Blur()
-	w.configInput.Blur()
-	w.custName.Blur()
 	w.compPickerSearch.Blur()
 	w.mfePickerSearch.Blur()
-	switch w.screen {
-	case wizScreenFile:
-		switch w.field {
-		case wizFieldName:
-			w.nameInput.Focus()
-		case wizFieldConfig:
-			w.configInput.Focus()
+	switch w.field {
+	case wizFieldComponents:
+		if w.compPickerOpen {
+			w.compPickerSearch.Focus()
 		}
-	case wizScreenCustom:
-		switch w.custField {
-		case custFieldName:
-			w.custName.Focus()
-		case custFieldComponents:
-			if w.compPickerOpen {
-				w.compPickerSearch.Focus()
-			}
-		case custFieldMFE:
-			if w.mfePickerOpen {
-				w.mfePickerSearch.Focus()
-			}
+	case wizFieldMFE:
+		if w.mfePickerOpen {
+			w.mfePickerSearch.Focus()
 		}
 	}
-}
-
-// findYAMLConfigs returns a sorted list of .yaml/.yml files found in common
-// locations relative to the working directory, plus the default config path.
-func findYAMLConfigs() []string {
-	seen := map[string]bool{}
-	var files []string
-	add := func(p string) {
-		if !seen[p] {
-			seen[p] = true
-			files = append(files, p)
-		}
-	}
-	for _, pattern := range []string{
-		"*.yaml", "*.yml",
-		"config/*.yaml", "config/*.yml",
-	} {
-		matches, _ := filepath.Glob(pattern)
-		for _, m := range matches {
-			add(m)
-		}
-	}
-	if p := DefaultConfigPath(); !seen[p] {
-		if _, err := os.Stat(p); err == nil {
-			add(p)
-		}
-	}
-	sort.Strings(files)
-	return files
 }

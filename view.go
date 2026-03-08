@@ -28,12 +28,12 @@ func (m model) View() string {
 	rowB := grid - rowT
 
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top,
-		m.renderScrollPanel(panelMinikube, m.minikubeTitle(m.focused == panelMinikube), m.minikubeVP.View(), colL, rowT),
-		m.renderScrollPanel(panelSkaffold, " Skaffold", m.skaffoldVP.View(), colR, rowT),
+		m.renderScrollPanel(panelMinikube, m.panelTitle(PanelTopLeft, m.focused == panelMinikube), m.panelVPs[PanelTopLeft].View(), colL, rowT),
+		m.renderScrollPanel(panelSkaffold, m.panelTitle(PanelTopRight, m.focused == panelSkaffold), m.panelVPs[PanelTopRight].View(), colR, rowT),
 	)
 	bottomRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		m.renderCommandsPanel(colL, rowB),
-		m.renderScrollPanel(panelMFE, " MFE", m.mfeVP.View(), colR, rowB),
+		m.renderScrollPanel(panelMFE, m.panelTitle(PanelBottomRight, m.focused == panelMFE), m.panelVPs[PanelBottomRight].View(), colR, rowB),
 	)
 
 	return lipgloss.JoinVertical(lipgloss.Left, bar, topRow, bottomRow)
@@ -86,17 +86,17 @@ func (m model) renderFullscreenTransition() string {
 	var panel string
 	switch m.focused {
 	case panelMinikube:
-		m.minikubeVP.Width = max(1, w-border)
-		m.minikubeVP.Height = max(1, h-border-titleH)
-		panel = m.renderScrollPanel(panelMinikube, m.minikubeTitle(true), m.minikubeVP.View(), w, h)
+		m.panelVPs[PanelTopLeft].Width = max(1, w-border)
+		m.panelVPs[PanelTopLeft].Height = max(1, h-border-titleH)
+		panel = m.renderScrollPanel(panelMinikube, m.panelTitle(PanelTopLeft, true), m.panelVPs[PanelTopLeft].View(), w, h)
 	case panelSkaffold:
-		m.skaffoldVP.Width = max(1, w-border)
-		m.skaffoldVP.Height = max(1, h-border-titleH)
-		panel = m.renderScrollPanel(panelSkaffold, " Skaffold", m.skaffoldVP.View(), w, h)
+		m.panelVPs[PanelTopRight].Width = max(1, w-border)
+		m.panelVPs[PanelTopRight].Height = max(1, h-border-titleH)
+		panel = m.renderScrollPanel(panelSkaffold, m.panelTitle(PanelTopRight, true), m.panelVPs[PanelTopRight].View(), w, h)
 	case panelMFE:
-		m.mfeVP.Width = max(1, w-border)
-		m.mfeVP.Height = max(1, h-border-titleH)
-		panel = m.renderScrollPanel(panelMFE, " MFE", m.mfeVP.View(), w, h)
+		m.panelVPs[PanelBottomRight].Width = max(1, w-border)
+		m.panelVPs[PanelBottomRight].Height = max(1, h-border-titleH)
+		panel = m.renderScrollPanel(panelMFE, m.panelTitle(PanelBottomRight, true), m.panelVPs[PanelBottomRight].View(), w, h)
 	default: // panelCommands
 		m.commandsVP.Width = max(1, w-border)
 		m.commandsVP.Height = max(1, h-border-titleH-inputH)
@@ -131,28 +131,50 @@ func (m model) renderFullscreen() string {
 	grid := m.height - 1
 	switch m.focused {
 	case panelMinikube:
-		return m.renderScrollPanel(panelMinikube, m.minikubeTitle(true), m.minikubeVP.View(), w, grid)
+		return m.renderScrollPanel(panelMinikube, m.panelTitle(PanelTopLeft, true), m.panelVPs[PanelTopLeft].View(), w, grid)
 	case panelSkaffold:
-		return m.renderScrollPanel(panelSkaffold, " Skaffold", m.skaffoldVP.View(), w, grid)
+		return m.renderScrollPanel(panelSkaffold, m.panelTitle(PanelTopRight, true), m.panelVPs[PanelTopRight].View(), w, grid)
 	case panelMFE:
-		return m.renderScrollPanel(panelMFE, " MFE", m.mfeVP.View(), w, grid)
+		return m.renderScrollPanel(panelMFE, m.panelTitle(PanelBottomRight, true), m.panelVPs[PanelBottomRight].View(), w, grid)
 	default: // panelCommands
 		return m.renderCommandsPanel(w, grid)
 	}
 }
 
-func (m model) minikubeTitle(focused bool) string {
-	active := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
+// panelTitle builds the title string for a content panel.
+// With multiple steps it shows "Step1 / Step2" with the active one bolded,
+// plus a cycling hint when the panel is focused.
+func (m model) panelTitle(pid PanelID, focused bool) string {
+	pv := m.panels[pid]
 	dim := lipgloss.NewStyle().Foreground(currentTheme.Muted)
-	sep := dim.Render(" / ")
-	var title string
-	if m.minikubeShowLog {
-		title = " " + active.Render("Minikube") + sep + dim.Render("kubectl")
-	} else {
-		title = " " + dim.Render("Minikube") + sep + active.Render("kubectl")
+
+	if len(pv.defs) == 0 {
+		switch pid {
+		case PanelTopLeft:
+			return dim.Render(" Panel 1")
+		case PanelTopRight:
+			return dim.Render(" Panel 2")
+		default:
+			return dim.Render(" Panel 3")
+		}
 	}
-	if focused {
-		title += dim.Render("  ·  t to toggle")
+
+	active := lipgloss.NewStyle().Foreground(currentTheme.Focused).Bold(true)
+	sep := dim.Render(" / ")
+
+	parts := make([]string, len(pv.defs))
+	for i, def := range pv.defs {
+		label := def.effectiveLabel()
+		if i == pv.activeIdx {
+			parts[i] = active.Render(label)
+		} else {
+			parts[i] = dim.Render(label)
+		}
+	}
+	title := " " + strings.Join(parts, sep)
+
+	if focused && len(pv.defs) > 1 {
+		title += dim.Render("  ·  t to cycle")
 	}
 	return title
 }
@@ -326,103 +348,14 @@ func wizardButtons(focused bool, idx int, hl lipgloss.Style) string {
 }
 
 func (m model) wizardTitle() string {
-	if m.wizard == nil {
-		return " Start"
-	}
-	switch m.wizard.screen {
-	case wizScreenFile:
-		return " Start › File"
-	case wizScreenCustom:
-		return " Start › Custom"
-	}
 	return " Start"
 }
 
 func (m model) renderWizard() string {
-	wiz := m.wizard
-	if wiz == nil {
+	if m.wizard == nil {
 		return ""
 	}
-	switch wiz.screen {
-	case wizScreenFile:
-		return m.renderWizardFile()
-	case wizScreenCustom:
-		return m.renderWizardCustom()
-	default:
-		return m.renderWizardSelect()
-	}
-}
-
-func (m model) renderWizardSelect() string {
-	wiz := m.wizard
-	ws := currentWizStyles()
-
-	options := []string{"Load from file", "Custom instance"}
-	var lines []string
-	lines = append(lines, "")
-	lines = append(lines, "  Choose how to start:")
-	lines = append(lines, "")
-	for i, opt := range options {
-		if i == wiz.screenIdx {
-			lines = append(lines, "  "+ws.sel.Render("● "+opt))
-		} else {
-			lines = append(lines, "  "+ws.dim.Render("○ "+opt))
-		}
-	}
-	lines = append(lines, "")
-	lines = append(lines, ws.hint.Render("  ↑↓ select  ·  Enter confirm  ·  Esc cancel"))
-	return strings.Join(lines, "\n")
-}
-
-func (m model) renderWizardFile() string {
-	wiz := m.wizard
-	ws := currentWizStyles()
-
-	var lines []string
-	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("Instance", wiz.field, wizFieldName, 10)+"  "+wiz.nameInput.View())
-	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("Config", wiz.field, wizFieldConfig, 10)+"  "+wiz.configInput.View())
-
-	if len(wiz.browseFiles) > 0 {
-		const browseWindow = 5
-		start := max(0, wiz.browseIdx-browseWindow/2)
-		end := min(len(wiz.browseFiles), start+browseWindow)
-		if end-start < browseWindow && start > 0 {
-			start = max(0, end-browseWindow)
-		}
-		configFocused := wiz.field == wizFieldConfig
-		for i := start; i < end; i++ {
-			f := wiz.browseFiles[i]
-			if i == wiz.browseIdx && configFocused {
-				lines = append(lines, "              "+ws.sel.Render("● "+f))
-			} else if i == wiz.browseIdx {
-				lines = append(lines, "              "+ws.dim.Render("● "+f))
-			} else {
-				lines = append(lines, "              "+ws.dim.Render("○ "+f))
-			}
-		}
-	}
-	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("Mode", wiz.field, wizFieldMode, 10)+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, ws.hl, ws.sel, ws.dim))
-	lines = append(lines, "")
-	lines = append(lines, "")
-	lines = append(lines, wizardButtons(wiz.field == wizFieldButtons, wiz.confirmIdx, ws.hl))
-	lines = append(lines, "")
-
-	var hintText string
-	switch wiz.field {
-	case wizFieldName:
-		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
-	case wizFieldConfig:
-		hintText = "  ↑↓ browse files  ·  Enter confirm  ·  Tab next  ·  Esc cancel"
-	case wizFieldMode:
-		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case wizFieldButtons:
-		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
-	}
-	lines = append(lines, ws.hint.Render(hintText))
-	return strings.Join(lines, "\n")
+	return m.renderWizardCustom()
 }
 
 func (m model) renderWizardCustom() string {
@@ -431,14 +364,12 @@ func (m model) renderWizardCustom() string {
 
 	var lines []string
 	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("Instance", wiz.custField, custFieldName, 12)+"  "+wiz.custName.View())
-	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("CPU", wiz.custField, custFieldCPU, 12)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.custField == custFieldCPU, ws.hl, ws.sel, ws.dim))
-	lines = append(lines, "  "+wizLabel("RAM", wiz.custField, custFieldRAM, 12)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.custField == custFieldRAM, ws.hl, ws.sel, ws.dim))
+	lines = append(lines, "  "+wizLabel("CPU", wiz.field, wizFieldCPU, 12)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.field == wizFieldCPU, ws.hl, ws.sel, ws.dim))
+	lines = append(lines, "  "+wizLabel("RAM", wiz.field, wizFieldRAM, 12)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.field == wizFieldRAM, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 
 	// ── Components field ──────────────────────────────────────────────────────
-	compFocused := wiz.custField == custFieldComponents
+	compFocused := wiz.field == wizFieldComponents
 	if wiz.compPickerOpen {
 		lines = append(lines, "  "+ws.hl.Render(" Components "))
 		lines = append(lines, "  "+wiz.compPickerSearch.View())
@@ -500,17 +431,17 @@ func (m model) renderWizardCustom() string {
 		for i, comp := range wiz.selectedComps {
 			var rowPrefix string
 			if i == 0 {
-				rowPrefix = "  " + wizLabel("Components", wiz.custField, custFieldComponents, 12) + "  "
+				rowPrefix = "  " + wizLabel("Components", wiz.field, wizFieldComponents, 12) + "  "
 			} else {
 				rowPrefix = "  " + strings.Repeat(" ", 12) + "  "
 			}
-			if i == wiz.custSelectedIdx {
+			if i == wiz.selectedIdx {
 				lines = append(lines, rowPrefix+ws.hl.Render(" ✓ "+comp+" "))
 			} else {
 				lines = append(lines, rowPrefix+ws.sel.Render("✓ "+comp))
 			}
 		}
-		isAddFocused := wiz.custSelectedIdx == len(wiz.selectedComps)
+		isAddFocused := wiz.selectedIdx == len(wiz.selectedComps)
 		var addBtn string
 		if isAddFocused {
 			addBtn = ws.hl.Render(" + Add ")
@@ -518,7 +449,7 @@ func (m model) renderWizardCustom() string {
 			addBtn = ws.dim.Render("[ + Add ]")
 		}
 		if len(wiz.selectedComps) == 0 {
-			lines = append(lines, "  "+wizLabel("Components", wiz.custField, custFieldComponents, 12)+"  "+addBtn)
+			lines = append(lines, "  "+wizLabel("Components", wiz.field, wizFieldComponents, 12)+"  "+addBtn)
 		} else {
 			lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
 		}
@@ -529,13 +460,13 @@ func (m model) renderWizardCustom() string {
 		} else {
 			summary = ws.sel.Render(strings.Join(wiz.selectedComps, ", "))
 		}
-		lines = append(lines, "  "+wizLabel("Components", wiz.custField, custFieldComponents, 12)+"  "+summary)
+		lines = append(lines, "  "+wizLabel("Components", wiz.field, wizFieldComponents, 12)+"  "+summary)
 		lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ + Add ]"))
 	}
 	lines = append(lines, "")
 
 	// ── MFE field ─────────────────────────────────────────────────────────────
-	mfeFocused := wiz.custField == custFieldMFE
+	mfeFocused := wiz.field == wizFieldMFE
 	if wiz.mfePickerOpen {
 		lines = append(lines, "  "+ws.hl.Render(" MFE "))
 		lines = append(lines, "  "+wiz.mfePickerSearch.View())
@@ -576,17 +507,17 @@ func (m model) renderWizardCustom() string {
 		} else {
 			mfeDisplay = ws.dim.Render(wiz.selectedMFE)
 		}
-		lines = append(lines, "  "+wizLabel("MFE", wiz.custField, custFieldMFE, 12)+"  "+mfeDisplay)
+		lines = append(lines, "  "+wizLabel("MFE", wiz.field, wizFieldMFE, 12)+"  "+mfeDisplay)
 		if mfeFocused && len(wiz.mfeAll) > 0 {
 			lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ Enter to select ]"))
 		}
 	}
 	lines = append(lines, "")
 
-	lines = append(lines, "  "+wizLabel("Mode", wiz.custField, custFieldMode, 12)+"  "+horizSelector(wiz.custModeIdx, skaffoldModes, wiz.custField == custFieldMode, ws.hl, ws.sel, ws.dim))
+	lines = append(lines, "  "+wizLabel("Mode", wiz.field, wizFieldMode, 12)+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, ws.hl, ws.sel, ws.dim))
 	lines = append(lines, "")
 	lines = append(lines, "")
-	lines = append(lines, wizardButtons(wiz.custField == custFieldButtons, wiz.custConfirmIdx, ws.hl))
+	lines = append(lines, wizardButtons(wiz.field == wizFieldButtons, wiz.confirmIdx, ws.hl))
 	lines = append(lines, "")
 
 	var hintText string
@@ -595,21 +526,19 @@ func (m model) renderWizardCustom() string {
 		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
 	case wiz.mfePickerOpen:
 		hintText = "  ↑↓ navigate  ·  Enter select  ·  type to search  ·  Tab done"
-	case wiz.custField == custFieldName:
-		hintText = "  ↑↓ or Tab to move  ·  type instance name  ·  Esc cancel"
-	case wiz.custField == custFieldCPU || wiz.custField == custFieldRAM:
+	case wiz.field == wizFieldCPU || wiz.field == wizFieldRAM:
 		hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case wiz.custField == custFieldComponents:
+	case wiz.field == wizFieldComponents:
 		hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
-	case wiz.custField == custFieldMFE:
+	case wiz.field == wizFieldMFE:
 		if len(wiz.mfeAll) > 0 {
 			hintText = "  Enter to pick  ·  x clear  ·  ↑↓ or Tab to move  ·  Esc cancel"
 		} else {
 			hintText = "  ↑↓ or Tab to move  ·  Esc cancel"
 		}
-	case wiz.custField == custFieldMode:
+	case wiz.field == wizFieldMode:
 		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case wiz.custField == custFieldButtons:
+	case wiz.field == wizFieldButtons:
 		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
 	lines = append(lines, ws.hint.Render(hintText))
@@ -642,13 +571,12 @@ func helpContent(width int) string {
 		{"PgUp / b", "page up"},
 		{"PgDn / f", "page down"},
 		{"g / G", "top / bottom"},
+		{"t", "cycle step views in panel"},
 		{"Ctrl+F", "fullscreen toggle"},
 	})
 	cmds := helpSection("Commands", []helpEntry{
 		{"help", "show this help"},
-		{"list", "list configured instances"},
-		{"use <name>", "switch to instance"},
-		{"start", "start current instance"},
+		{"start", "start the instance"},
 		{"stop", "stop instance + delete cluster"},
 		{"logs", "show log file paths"},
 		{"theme [name]", "set color theme"},
