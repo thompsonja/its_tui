@@ -119,6 +119,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pgid := msg.PID
 		go func() { _ = SaveMFEPGID(sp, pgid) }()
 
+	case step.DebugPortMsg:
+		m.debugPorts = append(m.debugPorts, msg)
+
 	case stepDoneMsg:
 		m.finishStep(msg.id, msg.ok, msg.label)
 
@@ -163,15 +166,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "esc":
-			// Close component picker before anything else.
-			if m.wizard != nil && m.wizard.compPickerOpen {
-				m.wizard.compPickerOpen = false
-				m.wizard.syncFocus()
-				return m, tea.Batch(cmds...)
-			}
-			// Close MFE picker.
-			if m.wizard != nil && m.wizard.mfePickerOpen {
-				m.wizard.mfePickerOpen = false
+			// Close open picker before anything else.
+			if m.wizard != nil && m.wizard.anyPickerOpen() {
+				if s := m.wizard.activeState(); s != nil {
+					s.pickerOpen = false
+				}
 				m.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
@@ -186,9 +185,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "tab":
 			// Picker open: Tab closes only the picker, does not cycle panels.
-			if m.wizard != nil && (m.wizard.compPickerOpen || m.wizard.mfePickerOpen) {
-				m.wizard.compPickerOpen = false
-				m.wizard.mfePickerOpen = false
+			if m.wizard != nil && m.wizard.anyPickerOpen() {
+				if s := m.wizard.activeState(); s != nil {
+					s.pickerOpen = false
+				}
 				m.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
@@ -202,9 +202,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "shift+tab":
 			// Picker open: Shift+Tab closes only the picker, does not cycle panels.
-			if m.wizard != nil && (m.wizard.compPickerOpen || m.wizard.mfePickerOpen) {
-				m.wizard.compPickerOpen = false
-				m.wizard.mfePickerOpen = false
+			if m.wizard != nil && m.wizard.anyPickerOpen() {
+				if s := m.wizard.activeState(); s != nil {
+					s.pickerOpen = false
+				}
 				m.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
@@ -353,7 +354,10 @@ func (m *model) resizePanels() {
 
 	if m.wizard != nil {
 		inputW := max(20, vpW_L-16)
-		m.wizard.compPickerSearch.Width = inputW
-		m.wizard.mfePickerSearch.Width = inputW
+		for i := range m.wizard.states {
+			if m.wizard.states[i].spec.Kind != FieldKindSelect {
+				m.wizard.states[i].pickerSearch.Width = inputW
+			}
+		}
 	}
 }

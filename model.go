@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
+	"tui/step"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -82,6 +83,9 @@ type model struct {
 	// spinner — shown in Commands title while background commands are running.
 	runningCmds int
 	spinnerTick int
+
+	// debugPorts collects port-forward events from skaffold debug.
+	debugPorts []step.DebugPortMsg
 
 	// steps tracks in-progress operations shown as spinner lines in the commands panel.
 	steps map[string]*commandStep

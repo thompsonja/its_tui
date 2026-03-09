@@ -8,188 +8,42 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 		return
 	}
 	key := msg.String()
+	numFields := len(wiz.states)
 
-	// Tab/Shift+Tab: cycle fields when pickers are closed; close picker when open.
+	// Tab / Shift+Tab: close picker when open, else cycle fields.
 	switch key {
 	case "tab":
-		if wiz.compPickerOpen {
-			wiz.compPickerOpen = false
-			wiz.syncFocus()
-		} else if wiz.mfePickerOpen {
-			wiz.mfePickerOpen = false
+		if wiz.anyPickerOpen() {
+			if s := wiz.activeState(); s != nil {
+				s.pickerOpen = false
+			}
 			wiz.syncFocus()
 		} else {
-			wiz.field = (wiz.field + 1) % wizNumFields
-			if wiz.field == wizFieldComponents {
-				wiz.selectedIdx = 0
+			wiz.fieldIdx = (wiz.fieldIdx + 1) % (numFields + 1)
+			if s := wiz.activeState(); s != nil && s.spec.Kind == FieldKindSystemSelect {
+				s.collapsedIdx = 0
 			}
 			wiz.syncFocus()
 		}
 		return
 	case "shift+tab":
-		if wiz.compPickerOpen {
-			wiz.compPickerOpen = false
-			wiz.syncFocus()
-		} else if wiz.mfePickerOpen {
-			wiz.mfePickerOpen = false
+		if wiz.anyPickerOpen() {
+			if s := wiz.activeState(); s != nil {
+				s.pickerOpen = false
+			}
 			wiz.syncFocus()
 		} else {
-			wiz.field = (wiz.field - 1 + wizNumFields) % wizNumFields
-			if wiz.field == wizFieldComponents {
-				wiz.selectedIdx = len(wiz.selectedComps)
+			wiz.fieldIdx = (wiz.fieldIdx - 1 + numFields + 1) % (numFields + 1)
+			if s := wiz.activeState(); s != nil && s.spec.Kind == FieldKindSystemSelect {
+				s.collapsedIdx = len(s.multiValues)
 			}
 			wiz.syncFocus()
 		}
 		return
 	}
 
-	switch wiz.field {
-	case wizFieldCPU:
-		switch key {
-		case "left":
-			if wiz.cpuIdx > 0 {
-				wiz.cpuIdx--
-			}
-		case "right":
-			if wiz.cpuIdx < len(cpuOptions)-1 {
-				wiz.cpuIdx++
-			}
-		case "up":
-			wiz.field = wizFieldButtons
-			wiz.syncFocus()
-		case "down", "enter":
-			wiz.field = wizFieldRAM
-			wiz.syncFocus()
-		}
-
-	case wizFieldRAM:
-		switch key {
-		case "left":
-			if wiz.ramIdx > 0 {
-				wiz.ramIdx--
-			}
-		case "right":
-			if wiz.ramIdx < len(ramOptions)-1 {
-				wiz.ramIdx++
-			}
-		case "up":
-			wiz.field = wizFieldCPU
-			wiz.syncFocus()
-		case "down", "enter":
-			wiz.field = wizFieldComponents
-			wiz.selectedIdx = 0
-			wiz.syncFocus()
-		}
-
-	case wizFieldComponents:
-		if wiz.compPickerOpen {
-			switch key {
-			case "up":
-				if wiz.compPickerIdx > 0 {
-					wiz.compPickerIdx--
-				}
-			case "down":
-				if wiz.compPickerIdx < len(wiz.compPickerItems)-1 {
-					wiz.compPickerIdx++
-				}
-			case "enter":
-				wiz.togglePickerItem(wiz.compPickerIdx)
-			default:
-				wiz.compPickerSearch, _ = wiz.compPickerSearch.Update(msg)
-				wiz.updateCompFilter()
-			}
-		} else {
-			switch key {
-			case "up":
-				if wiz.selectedIdx > 0 {
-					wiz.selectedIdx--
-				} else {
-					wiz.field = wizFieldRAM
-					wiz.syncFocus()
-				}
-			case "down":
-				if wiz.selectedIdx < len(wiz.selectedComps) {
-					wiz.selectedIdx++
-				} else {
-					wiz.field = wizFieldMFE
-					wiz.syncFocus()
-				}
-			case "x":
-				if wiz.selectedIdx < len(wiz.selectedComps) {
-					wiz.selectedComps = append(wiz.selectedComps[:wiz.selectedIdx], wiz.selectedComps[wiz.selectedIdx+1:]...)
-					if wiz.selectedIdx > len(wiz.selectedComps) {
-						wiz.selectedIdx = len(wiz.selectedComps)
-					}
-				}
-			case "enter":
-				wiz.compPickerOpen = true
-				wiz.compPickerSearch.SetValue("")
-				wiz.updateCompFilter()
-				wiz.syncFocus()
-			}
-		}
-
-	case wizFieldMFE:
-		if wiz.mfePickerOpen {
-			switch key {
-			case "up":
-				if wiz.mfePickerIdx > 0 {
-					wiz.mfePickerIdx--
-				}
-			case "down":
-				if wiz.mfePickerIdx < len(wiz.mfePickerItems)-1 {
-					wiz.mfePickerIdx++
-				}
-			case "enter":
-				if wiz.mfePickerIdx >= 0 && wiz.mfePickerIdx < len(wiz.mfePickerItems) {
-					wiz.selectedMFE = wiz.mfePickerItems[wiz.mfePickerIdx]
-				}
-				wiz.mfePickerOpen = false
-				wiz.syncFocus()
-			default:
-				wiz.mfePickerSearch, _ = wiz.mfePickerSearch.Update(msg)
-				wiz.updateMFEFilter()
-			}
-		} else {
-			switch key {
-			case "up":
-				wiz.field = wizFieldComponents
-				wiz.selectedIdx = len(wiz.selectedComps)
-				wiz.syncFocus()
-			case "down":
-				wiz.field = wizFieldMode
-				wiz.syncFocus()
-			case "enter":
-				if len(wiz.mfeAll) > 0 {
-					wiz.mfePickerOpen = true
-					wiz.mfePickerSearch.SetValue("")
-					wiz.updateMFEFilter()
-					wiz.syncFocus()
-				}
-			case "x":
-				wiz.selectedMFE = ""
-			}
-		}
-
-	case wizFieldMode:
-		switch key {
-		case "left":
-			if wiz.modeIdx > 0 {
-				wiz.modeIdx--
-			}
-		case "right":
-			if wiz.modeIdx < len(skaffoldModes)-1 {
-				wiz.modeIdx++
-			}
-		case "up":
-			wiz.field = wizFieldMFE
-			wiz.syncFocus()
-		case "down", "enter":
-			wiz.field = wizFieldButtons
-			wiz.syncFocus()
-		}
-
-	case wizFieldButtons:
+	// Buttons row.
+	if wiz.fieldIdx == numFields {
 		switch key {
 		case "left":
 			if wiz.confirmIdx > 0 {
@@ -200,16 +54,180 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 				wiz.confirmIdx++
 			}
 		case "up":
-			wiz.field = wizFieldMode
-			wiz.syncFocus()
+			if numFields > 0 {
+				wiz.fieldIdx = numFields - 1
+				wiz.syncFocus()
+			}
 		case "down":
-			wiz.field = wizFieldCPU
+			wiz.fieldIdx = 0
 			wiz.syncFocus()
 		case "enter":
 			if wiz.confirmIdx == 0 {
 				m.executeStartFromWizard()
 			}
 			m.flipTarget = 0.0
+		}
+		return
+	}
+
+	s := &wiz.states[wiz.fieldIdx]
+	next := func() {
+		wiz.fieldIdx = (wiz.fieldIdx + 1) % (numFields + 1)
+		wiz.syncFocus()
+	}
+	prev := func() {
+		wiz.fieldIdx = (wiz.fieldIdx - 1 + numFields + 1) % (numFields + 1)
+		wiz.syncFocus()
+	}
+
+	switch s.spec.Kind {
+	case FieldKindSelect:
+		switch key {
+		case "left":
+			if s.selectIdx > 0 {
+				s.selectIdx--
+			}
+		case "right":
+			if s.selectIdx < len(s.spec.Options)-1 {
+				s.selectIdx++
+			}
+		case "up":
+			prev()
+		case "down", "enter":
+			next()
+		}
+
+	case FieldKindSystemSelect:
+		if s.pickerOpen {
+			switch key {
+			case "up":
+				if s.pickerIdx > 0 {
+					s.pickerIdx--
+				}
+			case "down":
+				if s.pickerIdx < len(s.sysPickerItems)-1 {
+					s.pickerIdx++
+				}
+			case "enter":
+				s.toggleSysPicker(s.pickerIdx)
+			default:
+				s.pickerSearch, _ = s.pickerSearch.Update(msg)
+				s.updateSysFilter()
+			}
+		} else {
+			switch key {
+			case "up":
+				if s.collapsedIdx > 0 {
+					s.collapsedIdx--
+				} else {
+					prev()
+				}
+			case "down":
+				if s.collapsedIdx < len(s.multiValues) {
+					s.collapsedIdx++
+				} else {
+					next()
+				}
+			case "x":
+				if s.collapsedIdx < len(s.multiValues) {
+					s.multiValues = append(s.multiValues[:s.collapsedIdx], s.multiValues[s.collapsedIdx+1:]...)
+					if s.collapsedIdx > len(s.multiValues) {
+						s.collapsedIdx = len(s.multiValues)
+					}
+				}
+			case "enter":
+				s.pickerOpen = true
+				s.pickerSearch.SetValue("")
+				s.updateSysFilter()
+				wiz.syncFocus()
+			}
+		}
+
+	case FieldKindSingleSelect:
+		if s.pickerOpen {
+			switch key {
+			case "up":
+				if s.pickerIdx > 0 {
+					s.pickerIdx--
+				}
+			case "down":
+				if s.pickerIdx < len(s.strPickerItems)-1 {
+					s.pickerIdx++
+				}
+			case "enter":
+				if s.pickerIdx >= 0 && s.pickerIdx < len(s.strPickerItems) {
+					s.singleValue = s.strPickerItems[s.pickerIdx]
+				}
+				s.pickerOpen = false
+				wiz.syncFocus()
+			default:
+				s.pickerSearch, _ = s.pickerSearch.Update(msg)
+				s.updateStrFilter()
+			}
+		} else {
+			switch key {
+			case "up":
+				prev()
+			case "down":
+				next()
+			case "enter":
+				if len(s.spec.Options) > 0 {
+					s.pickerOpen = true
+					s.pickerSearch.SetValue("")
+					s.updateStrFilter()
+					wiz.syncFocus()
+				}
+			case "x":
+				s.singleValue = ""
+			}
+		}
+
+	case FieldKindMultiSelect:
+		if s.pickerOpen {
+			switch key {
+			case "up":
+				if s.pickerIdx > 0 {
+					s.pickerIdx--
+				}
+			case "down":
+				if s.pickerIdx < len(s.strPickerItems)-1 {
+					s.pickerIdx++
+				}
+			case "enter":
+				if s.pickerIdx >= 0 && s.pickerIdx < len(s.strPickerItems) {
+					s.toggleMulti(s.strPickerItems[s.pickerIdx])
+				}
+			default:
+				s.pickerSearch, _ = s.pickerSearch.Update(msg)
+				s.updateStrFilter()
+			}
+		} else {
+			switch key {
+			case "up":
+				if s.collapsedIdx > 0 {
+					s.collapsedIdx--
+				} else {
+					prev()
+				}
+			case "down":
+				if s.collapsedIdx < len(s.multiValues) {
+					s.collapsedIdx++
+				} else {
+					next()
+				}
+			case "x":
+				if s.collapsedIdx < len(s.multiValues) {
+					s.multiValues = append(s.multiValues[:s.collapsedIdx], s.multiValues[s.collapsedIdx+1:]...)
+					if s.collapsedIdx > len(s.multiValues) {
+						s.collapsedIdx = len(s.multiValues)
+					}
+				}
+			case "enter":
+				s.pickerOpen = true
+				s.pickerSearch.SetValue("")
+				s.updateStrFilter()
+				wiz.syncFocus()
+			}
 		}
 	}
 }

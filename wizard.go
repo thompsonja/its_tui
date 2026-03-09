@@ -6,60 +6,91 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 )
 
-// ── Start wizard ─────────────────────────────────────────────────────────────
-
-var skaffoldModes = []string{"dev", "run", "debug"}
-var cpuOptions = []string{"2", "4", "8", "16"}
-var ramOptions = []string{"2g", "4g", "8g", "16g"}
-
-// Wizard field indices.
-const (
-	wizFieldCPU        = 0
-	wizFieldRAM        = 1
-	wizFieldComponents = 2
-	wizFieldMFE        = 3
-	wizFieldMode       = 4
-	wizFieldButtons    = 5
-	wizNumFields       = 6
-)
-
 // pickerItem is one row in the hierarchical component picker: either a system
 // header or an individual component nested under a system.
 type pickerItem struct {
 	isSystem bool
-	system   string // system name
-	comp     string // component name; empty for system rows
+	system   string
+	comp     string // empty for system header rows
 }
 
+// fieldState holds the runtime state for one wizard field.
+type fieldState struct {
+	spec FieldSpec
+
+	// FieldKindSelect: index of the currently selected option.
+	selectIdx int
+
+	// FieldKindSingleSelect: the currently selected value.
+	singleValue string
+
+	// FieldKindMultiSelect / FieldKindSystemSelect: selected items.
+	multiValues  []string
+	collapsedIdx int // cursor in collapsed list (0..len(multiValues) = Add button)
+
+	// Picker state for Single / Multi / System select kinds.
+	pickerOpen     bool
+	pickerSearch   textinput.Model
+	pickerIdx      int
+	sysPickerItems []pickerItem // FieldKindSystemSelect filtered view
+	strPickerItems []string     // FieldKindSingleSelect / FieldKindMultiSelect filtered view
+}
+
+// startWizard drives the instance-start configuration screen.
 type startWizard struct {
-	field      int
-	cpuIdx     int
-	ramIdx     int
-	modeIdx    int
-	confirmIdx int
-
-	// ── Component picker (shown when wizFieldComponents is active) ────────────
-	compAll          []System
-	selectedComps    []string
-	selectedIdx      int // highlighted row in collapsed view (0..len-1 = comp, len = Add button)
-	compPickerOpen   bool
-	compPickerSearch textinput.Model
-	compPickerItems  []pickerItem // filtered view
-	compPickerIdx    int
-
-	// ── MFE picker (shown when wizFieldMFE is active) ─────────────────────────
-	mfeAll          []string
-	selectedMFE     string
-	mfePickerOpen   bool
-	mfePickerSearch textinput.Model
-	mfePickerItems  []string // filtered view
-	mfePickerIdx    int
+	fields     []FieldSpec  // all specs collected from templates, in order
+	states     []fieldState // one per field
+	fieldIdx   int          // index into states; len(states) = Buttons row
+	confirmIdx int          // 0 = Start, 1 = Cancel
 }
 
-func (w *startWizard) updateCompFilter() {
-	q := strings.ToLower(w.compPickerSearch.Value())
-	w.compPickerItems = w.compPickerItems[:0]
-	for _, sys := range w.compAll {
+// buildValues collects the wizard's current selections into a WizardValues.
+func (w *startWizard) buildValues() WizardValues {
+	v := WizardValues{
+		str:  make(map[string]string),
+		strs: make(map[string][]string),
+	}
+	for _, s := range w.states {
+		switch s.spec.Kind {
+		case FieldKindSelect:
+			if s.selectIdx >= 0 && s.selectIdx < len(s.spec.Options) {
+				v.str[s.spec.ID] = s.spec.Options[s.selectIdx]
+			}
+		case FieldKindSingleSelect:
+			if s.singleValue != "" {
+				v.str[s.spec.ID] = s.singleValue
+			}
+		case FieldKindMultiSelect, FieldKindSystemSelect:
+			v.strs[s.spec.ID] = s.multiValues
+		}
+	}
+	return v
+}
+
+// anyPickerOpen returns true if any field currently has its picker open.
+func (w *startWizard) anyPickerOpen() bool {
+	for _, s := range w.states {
+		if s.pickerOpen {
+			return true
+		}
+	}
+	return false
+}
+
+// activeState returns a pointer to the focused fieldState, or nil when the
+// Buttons row (fieldIdx == len(states)) is active.
+func (w *startWizard) activeState() *fieldState {
+	if w.fieldIdx >= 0 && w.fieldIdx < len(w.states) {
+		return &w.states[w.fieldIdx]
+	}
+	return nil
+}
+
+// updateSysFilter refreshes sysPickerItems based on the current search query.
+func (s *fieldState) updateSysFilter() {
+	q := strings.ToLower(s.pickerSearch.Value())
+	s.sysPickerItems = s.sysPickerItems[:0]
+	for _, sys := range s.spec.Systems {
 		sysMatches := q == "" || strings.Contains(strings.ToLower(sys.Name), q)
 		var matched []Component
 		for _, c := range sys.Components {
@@ -68,129 +99,170 @@ func (w *startWizard) updateCompFilter() {
 			}
 		}
 		if len(matched) > 0 {
-			w.compPickerItems = append(w.compPickerItems, pickerItem{isSystem: true, system: sys.Name})
+			s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
 			for _, c := range matched {
-				w.compPickerItems = append(w.compPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+				s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
 			}
 		}
 	}
-	if w.compPickerIdx >= len(w.compPickerItems) && len(w.compPickerItems) > 0 {
-		w.compPickerIdx = len(w.compPickerItems) - 1
+	if s.pickerIdx >= len(s.sysPickerItems) && len(s.sysPickerItems) > 0 {
+		s.pickerIdx = len(s.sysPickerItems) - 1
 	}
-	if len(w.compPickerItems) == 0 {
-		w.compPickerIdx = 0
+	if len(s.sysPickerItems) == 0 {
+		s.pickerIdx = 0
 	}
 }
 
-func (w *startWizard) updateMFEFilter() {
-	q := strings.ToLower(w.mfePickerSearch.Value())
-	w.mfePickerItems = w.mfePickerItems[:0]
-	for _, mfe := range w.mfeAll {
-		if q == "" || strings.Contains(strings.ToLower(mfe), q) {
-			w.mfePickerItems = append(w.mfePickerItems, mfe)
+// updateStrFilter refreshes strPickerItems based on the current search query.
+func (s *fieldState) updateStrFilter() {
+	q := strings.ToLower(s.pickerSearch.Value())
+	s.strPickerItems = s.strPickerItems[:0]
+	for _, opt := range s.spec.Options {
+		if q == "" || strings.Contains(strings.ToLower(opt), q) {
+			s.strPickerItems = append(s.strPickerItems, opt)
 		}
 	}
-	if w.mfePickerIdx >= len(w.mfePickerItems) && len(w.mfePickerItems) > 0 {
-		w.mfePickerIdx = len(w.mfePickerItems) - 1
+	if s.pickerIdx >= len(s.strPickerItems) && len(s.strPickerItems) > 0 {
+		s.pickerIdx = len(s.strPickerItems) - 1
 	}
-	if len(w.mfePickerItems) == 0 {
-		w.mfePickerIdx = 0
+	if len(s.strPickerItems) == 0 {
+		s.pickerIdx = 0
 	}
 }
 
-func (w *startWizard) isCompSelected(name string) bool {
-	for _, s := range w.selectedComps {
-		if s == name {
+// isMultiSelected returns true if name appears in the multiValues selection.
+func (s *fieldState) isMultiSelected(name string) bool {
+	for _, v := range s.multiValues {
+		if v == name {
 			return true
 		}
 	}
 	return false
 }
 
-func (w *startWizard) toggleComp(name string) {
-	for i, s := range w.selectedComps {
-		if s == name {
-			w.selectedComps = append(w.selectedComps[:i], w.selectedComps[i+1:]...)
+// toggleMulti adds or removes name from multiValues.
+func (s *fieldState) toggleMulti(name string) {
+	for i, v := range s.multiValues {
+		if v == name {
+			s.multiValues = append(s.multiValues[:i], s.multiValues[i+1:]...)
 			return
 		}
 	}
-	w.selectedComps = append(w.selectedComps, name)
+	s.multiValues = append(s.multiValues, name)
 }
 
-// togglePickerItem toggles the item at idx. For system rows, toggles all
-// visible components; if all are already selected, deselects them.
-func (w *startWizard) togglePickerItem(idx int) {
-	if idx < 0 || idx >= len(w.compPickerItems) {
+// toggleSysPicker toggles the item at idx in the hierarchical picker.
+// For system header rows, it toggles all visible components under that system.
+func (s *fieldState) toggleSysPicker(idx int) {
+	if idx < 0 || idx >= len(s.sysPickerItems) {
 		return
 	}
-	item := w.compPickerItems[idx]
+	item := s.sysPickerItems[idx]
 	if !item.isSystem {
-		w.toggleComp(item.comp)
+		s.toggleMulti(item.comp)
 		return
 	}
-	// Collect visible components for this system.
 	var comps []string
-	for _, pi := range w.compPickerItems {
+	for _, pi := range s.sysPickerItems {
 		if !pi.isSystem && pi.system == item.system {
 			comps = append(comps, pi.comp)
 		}
 	}
 	allSelected := len(comps) > 0
 	for _, c := range comps {
-		if !w.isCompSelected(c) {
+		if !s.isMultiSelected(c) {
 			allSelected = false
 			break
 		}
 	}
 	for _, c := range comps {
 		if allSelected {
-			for i, s := range w.selectedComps {
-				if s == c {
-					w.selectedComps = append(w.selectedComps[:i], w.selectedComps[i+1:]...)
+			for i, v := range s.multiValues {
+				if v == c {
+					s.multiValues = append(s.multiValues[:i], s.multiValues[i+1:]...)
 					break
 				}
 			}
-		} else if !w.isCompSelected(c) {
-			w.selectedComps = append(w.selectedComps, c)
+		} else if !s.isMultiSelected(c) {
+			s.multiValues = append(s.multiValues, c)
 		}
 	}
 }
 
-// newStartWizard creates a wizard pre-populated from the current model state.
-func newStartWizard(m *model) *startWizard {
+// newStartWizard creates a wizard driven by the templates in m.cfg.Steps.
+// initial, if non-empty, pre-populates fields from a previously saved session.
+func newStartWizard(m *model, initial WizardValues) *startWizard {
 	inputW := max(20, m.commandsVP.Width-16)
 
-	compSearch := textinput.New()
-	compSearch.Placeholder = "search systems or components…"
-	compSearch.Width = inputW
-
-	mfeSearch := textinput.New()
-	mfeSearch.Placeholder = "search MFEs…"
-	mfeSearch.Width = inputW
-
-	wiz := &startWizard{
-		compAll:          m.cfg.Systems,
-		compPickerSearch: compSearch,
-		mfeAll:           m.cfg.MFEs,
-		mfePickerSearch:  mfeSearch,
+	// Collect all fields from all templates, in template order.
+	var fields []FieldSpec
+	for _, tmpl := range m.cfg.Steps {
+		fields = append(fields, tmpl.Fields...)
 	}
-	wiz.updateCompFilter()
-	wiz.updateMFEFilter()
-	return wiz
+
+	states := make([]fieldState, len(fields))
+	for i, spec := range fields {
+		s := fieldState{spec: spec, selectIdx: spec.Default}
+
+		// Pre-populate from initial values (last session's wizard selections).
+		switch spec.Kind {
+		case FieldKindSelect:
+			if v := initial.String(spec.ID); v != "" {
+				for idx, opt := range spec.Options {
+					if opt == v {
+						s.selectIdx = idx
+						break
+					}
+				}
+			}
+		case FieldKindSingleSelect:
+			s.singleValue = initial.String(spec.ID)
+		case FieldKindMultiSelect, FieldKindSystemSelect:
+			if vals := initial.Strings(spec.ID); len(vals) > 0 {
+				s.multiValues = append([]string(nil), vals...)
+			}
+		}
+
+		// Set up picker search inputs and initial item lists.
+		switch spec.Kind {
+		case FieldKindSystemSelect:
+			search := textinput.New()
+			search.Placeholder = "search systems or components…"
+			search.Width = inputW
+			s.pickerSearch = search
+			for _, sys := range spec.Systems {
+				s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
+				for _, c := range sys.Components {
+					s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+				}
+			}
+		case FieldKindSingleSelect, FieldKindMultiSelect:
+			search := textinput.New()
+			search.Placeholder = "search…"
+			search.Width = inputW
+			s.pickerSearch = search
+			s.strPickerItems = append([]string(nil), spec.Options...)
+		}
+		states[i] = s
+	}
+
+	return &startWizard{
+		fields: fields,
+		states: states,
+	}
 }
 
-// syncFocus focuses the active text input and blurs all others.
+// syncFocus focuses the active picker search input and blurs all others.
 func (w *startWizard) syncFocus() {
-	w.compPickerSearch.Blur()
-	w.mfePickerSearch.Blur()
-	switch w.field {
-	case wizFieldComponents:
-		if w.compPickerOpen {
-			w.compPickerSearch.Focus()
+	for i := range w.states {
+		s := &w.states[i]
+		if s.spec.Kind == FieldKindSelect {
+			continue
 		}
-	case wizFieldMFE:
-		if w.mfePickerOpen {
-			w.mfePickerSearch.Focus()
+		if i == w.fieldIdx && s.pickerOpen {
+			s.pickerSearch.Focus()
+		} else {
+			s.pickerSearch.Blur()
 		}
 	}
 }

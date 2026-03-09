@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 	"tui/config"
 )
@@ -70,6 +72,7 @@ func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath st
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
+	fmt.Fprintf(lf, "[tui] running: %s\n", strings.Join(cmd.Args, " "))
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return nil // cancelled
@@ -96,6 +99,7 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
+	fmt.Fprintf(lf, "[tui] running: %s\n", strings.Join(cmd.Args, " "))
 
 	if err := cmd.Start(); err != nil {
 		lf.Close()
@@ -125,12 +129,14 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 		}
 	}()
 
-	// ready is closed by the watcher goroutine when a deploy-complete event
-	// is received (or when the watcher context is cancelled).
+	// ready is closed exactly once when the first deploy-complete event arrives.
+	// processSkaffoldEvents continues running after that to capture port events.
 	ready := make(chan struct{})
+	var readyOnce sync.Once
 	go func() {
-		waitForSkaffoldDeploy(watchCtx, port)
-		close(ready)
+		processSkaffoldEvents(watchCtx, port, func() {
+			readyOnce.Do(func() { close(ready) })
+		})
 	}()
 
 	select {
@@ -170,10 +176,10 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 // Stop is a no-op: skaffold is terminated when the instance context is cancelled.
 func (s *SkaffoldStep) Stop(_ context.Context, _ string) error { return nil }
 
-// waitForSkaffoldDeploy connects to the Skaffold HTTP event stream and blocks
-// until a successful deploy event is received, the stream closes, or ctx is
-// cancelled.
-func waitForSkaffoldDeploy(ctx context.Context, port int) {
+// processSkaffoldEvents connects to the Skaffold HTTP event stream and reads
+// it until ctx is cancelled. It calls onDeployed when the first deploy-complete
+// event is seen, and sends a DebugPortMsg for each port-forward event.
+func processSkaffoldEvents(ctx context.Context, port int, onDeployed func()) {
 	url := fmt.Sprintf("http://localhost:%d/v1/events", port)
 
 	// Retry until the HTTP server comes up. Skaffold starts the HTTP listener
@@ -205,9 +211,45 @@ func waitForSkaffoldDeploy(ctx context.Context, port int) {
 		if ctx.Err() != nil {
 			return
 		}
-		if skaffoldDeployComplete(scanner.Text()) {
-			return
+		line := scanner.Text()
+		if skaffoldDeployComplete(line) {
+			onDeployed()
 		}
+		if msg := skaffoldPortEvent(line); msg != nil {
+			Send(*msg)
+		}
+	}
+}
+
+// skaffoldPortEvent parses a port-forward event from the Skaffold event stream.
+// Returns nil if the line is not a port event or cannot be parsed.
+func skaffoldPortEvent(line string) *DebugPortMsg {
+	var env struct {
+		Result struct {
+			Event struct {
+				PortEvent struct {
+					LocalPort    int    `json:"localPort"`
+					RemotePort   int    `json:"remotePort"`
+					ResourceName string `json:"resourceName"`
+					PortName     string `json:"portName"`
+					Address      string `json:"address"`
+				} `json:"portEvent"`
+			} `json:"event"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(line), &env); err != nil {
+		return nil
+	}
+	pe := env.Result.Event.PortEvent
+	if pe.LocalPort == 0 {
+		return nil
+	}
+	return &DebugPortMsg{
+		LocalPort:    pe.LocalPort,
+		RemotePort:   pe.RemotePort,
+		ResourceName: pe.ResourceName,
+		PortName:     pe.PortName,
+		Address:      pe.Address,
 	}
 }
 

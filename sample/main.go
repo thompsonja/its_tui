@@ -22,66 +22,71 @@ func sampleDir() string {
 
 func main() {
 	cfg := tui.Config{
-		Systems: []tui.System{
-			{
-				Name: "checkout",
-				Components: []tui.Component{
-					{Name: "checkout-backend"},
-					{Name: "checkout-bff"},
+		Steps: []tui.StepTemplate{
+			tui.MinikubeTemplate(),
+			tui.KubectlTemplate(),
+			tui.SkaffoldTemplate(
+				func(components []string, mode string) (string, error) {
+					// A real implementation would generate a skaffold.yaml from
+					// the selected components and mode. Here we return the static
+					// sample file for demonstration purposes.
+					return filepath.Join(sampleDir(), "skaffold.yaml"), nil
 				},
-			},
-			{
-				Name: "user",
-				Components: []tui.Component{
-					{Name: "user-service"},
-					{Name: "user-bff"},
+				[]tui.System{
+					{
+						Name: "checkout",
+						Components: []tui.Component{
+							{Name: "checkout-backend"},
+							{Name: "checkout-bff"},
+						},
+					},
+					{
+						Name: "user",
+						Components: []tui.Component{
+							{Name: "user-service"},
+							{Name: "user-bff"},
+						},
+					},
+					{
+						Name: "product",
+						Components: []tui.Component{
+							{Name: "product-service"},
+							{Name: "product-bff"},
+						},
+					},
+					{
+						Name: "order",
+						Components: []tui.Component{
+							{Name: "order-service"},
+							{Name: "order-bff"},
+						},
+					},
+					{
+						Name: "analytics",
+						Components: []tui.Component{
+							{Name: "analytics-backend"},
+							{Name: "analytics-bff"},
+						},
+					},
 				},
-			},
-			{
-				Name: "product",
-				Components: []tui.Component{
-					{Name: "product-service"},
-					{Name: "product-bff"},
+			),
+			tui.MFETemplate(
+				[]string{
+					"checkout-mfe",
+					"user-mfe",
+					"product-mfe",
+					"analytics-mfe",
 				},
-			},
-			{
-				Name: "order",
-				Components: []tui.Component{
-					{Name: "order-service"},
-					{Name: "order-bff"},
+				// RunMFE maps every MFE name to the sample mfe/ directory.
+				// A real implementation would map each name to its own repo.
+				func(name string) tui.MFECommand {
+					return tui.MFECommand{
+						Cmd:  "npm",
+						Args: []string{"start"},
+						Dir:  filepath.Join(sampleDir(), "mfe"),
+					}
 				},
-			},
-			{
-				Name: "analytics",
-				Components: []tui.Component{
-					{Name: "analytics-backend"},
-					{Name: "analytics-bff"},
-				},
-			},
-		},
-
-		MFEs: []string{
-			"checkout-mfe",
-			"user-mfe",
-			"product-mfe",
-			"analytics-mfe",
-		},
-
-		// GenerateSkaffold is called with the list of selected components and
-		// should return the path to a skaffold.yaml. Here we return the static
-		// sample file; a real implementation would generate one on the fly.
-		GenerateSkaffold: func(components []string) (string, error) {
-			return filepath.Join(sampleDir(), "skaffold.yaml"), nil
-		},
-
-		// RunMFE maps every MFE name to the sample mfe/ directory.
-		// A real implementation would map each name to its own repo/directory.
-		RunMFE: func(mfe string) tui.MFECommand {
-			return tui.MFECommand{
-				Cmd:  "npm",
-				Args: []string{"start"},
-				Dir:  filepath.Join(sampleDir(), "mfe"),
-			}
+			),
 		},
 	}
 

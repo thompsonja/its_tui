@@ -128,9 +128,9 @@ func TestWrapContent_EmptyBuf(t *testing.T) {
 	}
 }
 
-// ── component picker ─────────────────────────────────────────────────────────
+// ── component picker (fieldState / SystemSelect) ──────────────────────────────
 
-func newTestWiz() *startWizard {
+func newTestSysField() *fieldState {
 	si := textinput.New()
 	si.Width = 40
 	systems := []System{
@@ -143,111 +143,118 @@ func newTestWiz() *startWizard {
 			{Name: "user-bff"},
 		}},
 	}
-	wiz := &startWizard{compAll: systems, compPickerSearch: si}
-	wiz.updateCompFilter()
-	return wiz
+	spec := FieldSpec{ID: "components", Kind: FieldKindSystemSelect, Systems: systems}
+	s := &fieldState{spec: spec, pickerSearch: si}
+	// Initialise full items list (mirrors newStartWizard logic).
+	for _, sys := range systems {
+		s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
+		for _, c := range sys.Components {
+			s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+		}
+	}
+	return s
 }
 
-func TestUpdateCompFilter_EmptyQuery(t *testing.T) {
-	wiz := newTestWiz()
+func TestUpdateSysFilter_EmptyQuery(t *testing.T) {
+	s := newTestSysField()
 	// 2 systems × (1 system header + N comps) = 2+2+2 = 6 items
-	if len(wiz.compPickerItems) != 6 {
-		t.Fatalf("expected 6 picker items, got %d", len(wiz.compPickerItems))
+	if len(s.sysPickerItems) != 6 {
+		t.Fatalf("expected 6 picker items, got %d", len(s.sysPickerItems))
 	}
 }
 
-func TestUpdateCompFilter_BySystemName(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.compPickerSearch.SetValue("checkout")
-	wiz.updateCompFilter()
+func TestUpdateSysFilter_BySystemName(t *testing.T) {
+	s := newTestSysField()
+	s.pickerSearch.SetValue("checkout")
+	s.updateSysFilter()
 	// system header + 2 components = 3
-	if len(wiz.compPickerItems) != 3 {
-		t.Fatalf("expected 3 items, got %d: %v", len(wiz.compPickerItems), wiz.compPickerItems)
+	if len(s.sysPickerItems) != 3 {
+		t.Fatalf("expected 3 items, got %d: %v", len(s.sysPickerItems), s.sysPickerItems)
 	}
-	if !wiz.compPickerItems[0].isSystem || wiz.compPickerItems[0].system != "checkout" {
+	if !s.sysPickerItems[0].isSystem || s.sysPickerItems[0].system != "checkout" {
 		t.Fatal("first item should be checkout system header")
 	}
 }
 
-func TestUpdateCompFilter_ByComponentName(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.compPickerSearch.SetValue("user-bff")
-	wiz.updateCompFilter()
+func TestUpdateSysFilter_ByComponentName(t *testing.T) {
+	s := newTestSysField()
+	s.pickerSearch.SetValue("user-bff")
+	s.updateSysFilter()
 	// user system header + 1 matching component = 2
-	if len(wiz.compPickerItems) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(wiz.compPickerItems))
+	if len(s.sysPickerItems) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(s.sysPickerItems))
 	}
 }
 
-func TestUpdateCompFilter_NoMatch(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.compPickerSearch.SetValue("zzz")
-	wiz.updateCompFilter()
-	if len(wiz.compPickerItems) != 0 {
-		t.Fatalf("expected 0 items, got %d", len(wiz.compPickerItems))
+func TestUpdateSysFilter_NoMatch(t *testing.T) {
+	s := newTestSysField()
+	s.pickerSearch.SetValue("zzz")
+	s.updateSysFilter()
+	if len(s.sysPickerItems) != 0 {
+		t.Fatalf("expected 0 items, got %d", len(s.sysPickerItems))
 	}
 }
 
-func TestUpdateCompFilter_CaseInsensitive(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.compPickerSearch.SetValue("CHECKOUT")
-	wiz.updateCompFilter()
-	if len(wiz.compPickerItems) == 0 {
+func TestUpdateSysFilter_CaseInsensitive(t *testing.T) {
+	s := newTestSysField()
+	s.pickerSearch.SetValue("CHECKOUT")
+	s.updateSysFilter()
+	if len(s.sysPickerItems) == 0 {
 		t.Fatal("expected matches for CHECKOUT (case-insensitive)")
 	}
 }
 
-func TestUpdateCompFilter_ClampsIdx(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.compPickerIdx = 5
-	wiz.compPickerSearch.SetValue("checkout")
-	wiz.updateCompFilter()
-	if wiz.compPickerIdx >= len(wiz.compPickerItems) {
-		t.Fatalf("compPickerIdx %d out of bounds (%d items)", wiz.compPickerIdx, len(wiz.compPickerItems))
+func TestUpdateSysFilter_ClampsIdx(t *testing.T) {
+	s := newTestSysField()
+	s.pickerIdx = 5
+	s.pickerSearch.SetValue("checkout")
+	s.updateSysFilter()
+	if s.pickerIdx >= len(s.sysPickerItems) {
+		t.Fatalf("pickerIdx %d out of bounds (%d items)", s.pickerIdx, len(s.sysPickerItems))
 	}
 }
 
-func TestIsCompSelected(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend"}
-	if !wiz.isCompSelected("checkout-backend") {
+func TestIsMultiSelected(t *testing.T) {
+	s := newTestSysField()
+	s.multiValues = []string{"checkout-backend"}
+	if !s.isMultiSelected("checkout-backend") {
 		t.Fatal("expected checkout-backend to be selected")
 	}
-	if wiz.isCompSelected("user-service") {
+	if s.isMultiSelected("user-service") {
 		t.Fatal("user-service should not be selected")
 	}
 }
 
-func TestToggleComp_Adds(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.toggleComp("checkout-backend")
-	if !wiz.isCompSelected("checkout-backend") {
+func TestToggleMulti_Adds(t *testing.T) {
+	s := newTestSysField()
+	s.toggleMulti("checkout-backend")
+	if !s.isMultiSelected("checkout-backend") {
 		t.Fatal("expected checkout-backend selected")
 	}
 }
 
-func TestToggleComp_Removes(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend"}
-	wiz.toggleComp("checkout-backend")
-	if wiz.isCompSelected("checkout-backend") {
+func TestToggleMulti_Removes(t *testing.T) {
+	s := newTestSysField()
+	s.multiValues = []string{"checkout-backend"}
+	s.toggleMulti("checkout-backend")
+	if s.isMultiSelected("checkout-backend") {
 		t.Fatal("expected checkout-backend removed")
 	}
 }
 
-func TestToggleComp_PreservesOthers(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend", "user-service"}
-	wiz.toggleComp("checkout-backend")
-	if !wiz.isCompSelected("user-service") {
+func TestToggleMulti_PreservesOthers(t *testing.T) {
+	s := newTestSysField()
+	s.multiValues = []string{"checkout-backend", "user-service"}
+	s.toggleMulti("checkout-backend")
+	if !s.isMultiSelected("user-service") {
 		t.Fatal("user-service should remain selected")
 	}
 }
 
-func TestTogglePickerItem_Component(t *testing.T) {
-	wiz := newTestWiz()
+func TestToggleSysPicker_Component(t *testing.T) {
+	s := newTestSysField()
 	idx := -1
-	for i, pi := range wiz.compPickerItems {
+	for i, pi := range s.sysPickerItems {
 		if !pi.isSystem && pi.comp == "checkout-backend" {
 			idx = i
 			break
@@ -256,37 +263,37 @@ func TestTogglePickerItem_Component(t *testing.T) {
 	if idx == -1 {
 		t.Fatal("checkout-backend not found in picker items")
 	}
-	wiz.togglePickerItem(idx)
-	if !wiz.isCompSelected("checkout-backend") {
+	s.toggleSysPicker(idx)
+	if !s.isMultiSelected("checkout-backend") {
 		t.Fatal("expected checkout-backend to be selected")
 	}
 }
 
-func TestTogglePickerItem_System_SelectsAll(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.togglePickerItem(0)
-	if !wiz.isCompSelected("checkout-backend") || !wiz.isCompSelected("checkout-bff") {
+func TestToggleSysPicker_System_SelectsAll(t *testing.T) {
+	s := newTestSysField()
+	s.toggleSysPicker(0)
+	if !s.isMultiSelected("checkout-backend") || !s.isMultiSelected("checkout-bff") {
 		t.Fatal("expected all checkout components selected")
 	}
 }
 
-func TestTogglePickerItem_System_DeselectsAll(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend", "checkout-bff"}
-	wiz.togglePickerItem(0)
-	if wiz.isCompSelected("checkout-backend") || wiz.isCompSelected("checkout-bff") {
+func TestToggleSysPicker_System_DeselectsAll(t *testing.T) {
+	s := newTestSysField()
+	s.multiValues = []string{"checkout-backend", "checkout-bff"}
+	s.toggleSysPicker(0)
+	if s.isMultiSelected("checkout-backend") || s.isMultiSelected("checkout-bff") {
 		t.Fatal("expected all checkout components deselected")
 	}
 }
 
-func TestTogglePickerItem_System_PartialSelectsRemaining(t *testing.T) {
-	wiz := newTestWiz()
-	wiz.selectedComps = []string{"checkout-backend"}
-	wiz.togglePickerItem(0)
-	if !wiz.isCompSelected("checkout-bff") {
+func TestToggleSysPicker_System_PartialSelectsRemaining(t *testing.T) {
+	s := newTestSysField()
+	s.multiValues = []string{"checkout-backend"}
+	s.toggleSysPicker(0)
+	if !s.isMultiSelected("checkout-bff") {
 		t.Fatal("expected checkout-bff to be selected")
 	}
-	if !wiz.isCompSelected("checkout-backend") {
+	if !s.isMultiSelected("checkout-backend") {
 		t.Fatal("checkout-backend should still be selected")
 	}
 }

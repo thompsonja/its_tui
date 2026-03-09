@@ -20,13 +20,10 @@ type State struct {
 // StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
 // the MFE process starts. Instance is nil when nothing is running.
 type InstanceState struct {
-	StartedAt  string   `json:"started_at,omitempty"`
-	MFEPGID    int      `json:"mfe_pgid,omitempty"`
-	CPU        string   `json:"cpu,omitempty"`
-	RAM        string   `json:"ram,omitempty"`
-	Components []string `json:"components,omitempty"`
-	MFE        string   `json:"mfe,omitempty"`
-	Mode       string   `json:"mode,omitempty"`
+	StartedAt    string              `json:"started_at,omitempty"`
+	MFEPGID      int                 `json:"mfe_pgid,omitempty"`
+	StringValues map[string]string   `json:"string_values,omitempty"`
+	SliceValues  map[string][]string `json:"slice_values,omitempty"`
 }
 
 const maxHistoryLen = 10

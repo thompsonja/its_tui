@@ -3,9 +3,88 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"tui/step"
 )
+
+// debugRuntime returns a human-readable runtime name for a skaffold portName.
+func debugRuntime(portName string) string {
+	switch portName {
+	case "dlv":
+		return "dlv/Go"
+	case "jvm":
+		return "jvm/Java"
+	case "ptvsd", "debugpy":
+		return "debugpy/Python"
+	case "node", "nodejs":
+		return "node/Node.js"
+	default:
+		if portName != "" {
+			return portName
+		}
+		return "unknown"
+	}
+}
+
+// vscodeLaunchConfig returns the lines of a VSCode launch configuration object
+// (without the surrounding braces) for the given debug port.
+func vscodeLaunchConfig(p step.DebugPortMsg, addr string) []string {
+	name := p.ResourceName
+	if name == "" {
+		name = fmt.Sprintf("port-%d", p.LocalPort)
+	}
+	switch p.PortName {
+	case "dlv":
+		return []string{
+			`{`,
+			fmt.Sprintf(`  "name": "Attach %s",`, name),
+			`  "type": "go",`,
+			`  "request": "attach",`,
+			`  "mode": "remote",`,
+			fmt.Sprintf(`  "port": %d,`, p.LocalPort),
+			fmt.Sprintf(`  "host": "%s"`, addr),
+		}
+	case "jvm":
+		return []string{
+			`{`,
+			fmt.Sprintf(`  "name": "Attach %s",`, name),
+			`  "type": "java",`,
+			`  "request": "attach",`,
+			fmt.Sprintf(`  "hostName": "%s",`, addr),
+			fmt.Sprintf(`  "port": %d`, p.LocalPort),
+		}
+	case "ptvsd", "debugpy":
+		return []string{
+			`{`,
+			fmt.Sprintf(`  "name": "Attach %s",`, name),
+			`  "type": "python",`,
+			`  "request": "attach",`,
+			`  "connect": {`,
+			fmt.Sprintf(`    "host": "%s",`, addr),
+			fmt.Sprintf(`    "port": %d`, p.LocalPort),
+			`  }`,
+		}
+	case "node", "nodejs":
+		return []string{
+			`{`,
+			fmt.Sprintf(`  "name": "Attach %s",`, name),
+			`  "type": "node",`,
+			`  "request": "attach",`,
+			fmt.Sprintf(`  "address": "%s",`, addr),
+			fmt.Sprintf(`  "port": %d,`, p.LocalPort),
+			`  "localRoot": "${workspaceFolder}",`,
+			`  "remoteRoot": "/app"`,
+		}
+	default:
+		return []string{
+			`{`,
+			fmt.Sprintf(`  "name": "Attach %s",`, name),
+			fmt.Sprintf(`  "port": %d,`, p.LocalPort),
+			fmt.Sprintf(`  "address": "%s"`, addr),
+		}
+	}
+}
 
 // switchToInstance cancels the current instance context, clears panel content,
 // and sets the new instance name. Callers are responsible for calling
@@ -14,6 +93,7 @@ func (m *model) switchToInstance(name string) {
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
 	m.instance.Name = name
+	m.debugPorts = nil
 	// Clear panel buffers (defs are reset by a subsequent registerPipeline call).
 	for i := range m.panels {
 		for j := range m.panels[i].bufs {
@@ -29,57 +109,57 @@ func (m *model) switchToInstance(name string) {
 // buildPipelineFromState reconstructs the step graph from a saved InstanceState,
 // used when restoring a previously-running instance after a restart.
 func (m *model) buildPipelineFromState(instanceName string, inst *InstanceState) []StepDef {
+	str := inst.StringValues
+	strs := inst.SliceValues
+	if str == nil {
+		str = map[string]string{}
+	}
+	if strs == nil {
+		strs = map[string][]string{}
+	}
+	values := WizardValues{str: str, strs: strs}
+	defs, _ := m.buildDefsFromTemplates(values)
+	return defs
+}
+
+// buildDefsFromTemplates builds a StepDef slice from all templates using values.
+// On error it returns the error; callers that want best-effort (session restore)
+// can ignore it.
+func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 	sp := m.statePath
-	cpu := inst.CPU
-	if cpu == "" {
-		cpu = "4"
-	}
-	ram := inst.RAM
-	if ram == "" {
-		ram = "4g"
-	}
-	mode := inst.Mode
-	if mode == "" {
-		mode = "dev"
-	}
-
-	defs := []StepDef{
-		{
-			Step:  &MinikubeStep{CPU: cpu, RAM: ram},
-			Panel: PanelTopLeft,
-			Label: "Minikube",
-		},
-		{
-			Step:         &KubectlStep{},
-			Panel:        PanelTopLeft,
-			Label:        "kubectl",
-			WaitFor:      "minikube",
-			AutoActivate: true,
-			Hidden:       true,
-			OnReady:      func() { _ = MarkActive(sp) },
-		},
-	}
-
-	if m.cfg.GenerateSkaffold != nil {
-		if path, err := m.cfg.GenerateSkaffold(inst.Components); err == nil && path != "" {
-			defs = append(defs, StepDef{
-				Step:    &SkaffoldStep{Path: path, Mode: mode},
-				Panel:   PanelTopRight,
-				Label:   "Skaffold",
-				WaitFor: "minikube",
-			})
+	var defs []StepDef
+	for _, tmpl := range m.cfg.Steps {
+		s, err := tmpl.Build(values)
+		if err != nil {
+			label := tmpl.Label
+			if label == "" {
+				label = "step"
+			}
+			return nil, fmt.Errorf("%s: %w", label, err)
 		}
-	}
-
-	if mfeCmd := m.cfg.mfeCommand(inst.MFE); mfeCmd.Cmd != "" {
+		if s == nil {
+			continue
+		}
+		label := tmpl.Label
+		if tmpl.LabelFunc != nil {
+			label = tmpl.LabelFunc(values)
+		}
+		var onReady func()
+		if tmpl.OnReady != nil {
+			fn := tmpl.OnReady
+			onReady = func() { fn(sp) }
+		}
 		defs = append(defs, StepDef{
-			Step:  &MFEStep{Cmd: mfeCmd},
-			Panel: PanelBottomRight,
-			Label: "MFE",
+			Step:         s,
+			Panel:        tmpl.Panel,
+			Label:        label,
+			WaitFor:      tmpl.WaitFor,
+			AutoActivate: tmpl.AutoActivate,
+			Hidden:       tmpl.Hidden,
+			OnReady:      onReady,
 		})
 	}
-
-	return defs
+	return defs, nil
 }
 
 // dispatchCommand routes typed text to internal command handlers.
@@ -96,8 +176,21 @@ func (m *model) dispatchCommand(line string) {
 		m.flipTarget = 1.0
 
 	case "start":
+		// Pre-populate the wizard from the last saved session, if any.
+		var initial WizardValues
+		if state, err := LoadState(sp); err == nil && state.Instance != nil {
+			str := state.Instance.StringValues
+			strs := state.Instance.SliceValues
+			if str == nil {
+				str = map[string]string{}
+			}
+			if strs == nil {
+				strs = map[string][]string{}
+			}
+			initial = WizardValues{str: str, strs: strs}
+		}
 		m.overlay = overlayWizard
-		m.wizard = newStartWizard(m)
+		m.wizard = newStartWizard(m, initial)
 		m.flipTarget = 1.0
 
 	case "stop":
@@ -121,16 +214,48 @@ func (m *model) dispatchCommand(line string) {
 		for i := range m.panelVPs {
 			m.panelVPs[i].SetContent("")
 		}
+		// Collect stop tasks from templates in reverse order (last-in, first-out).
+		type stopTask struct {
+			id    string
+			label string
+			fn    func(context.Context, string)
+		}
+		var stopTasks []stopTask
+		for i := len(m.cfg.Steps) - 1; i >= 0; i-- {
+			tmpl := m.cfg.Steps[i]
+			if tmpl.StopFunc == nil {
+				continue
+			}
+			label := tmpl.StopLabel
+			if label == "" {
+				l := tmpl.Label
+				if l == "" {
+					l = "step"
+				}
+				label = "stopping " + l
+			}
+			stopTasks = append(stopTasks, stopTask{
+				id:    fmt.Sprintf("stop-%d", i),
+				label: label,
+				fn:    tmpl.StopFunc,
+			})
+		}
 		m.startStep("mfe-stop", "stopping MFE")
-		m.startStep("cluster-delete", "deleting cluster")
+		for _, t := range stopTasks {
+			m.startStep(t.id, t.label)
+		}
 		go func() {
 			prog.Send(cmdActiveMsg(+1))
+			// Kill MFE process group (state-based; runs before template StopFuncs).
 			if state, err := LoadState(sp); err == nil && state.Instance != nil {
 				step.KillProcessGroup(state.Instance.MFEPGID)
 			}
 			prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
-			(&MinikubeStep{}).Stop(context.Background(), name)
-			prog.Send(stepDoneMsg{id: "cluster-delete", ok: true, label: "cluster deleted"})
+			// Run template stop functions in reverse template order.
+			for _, t := range stopTasks {
+				t.fn(context.Background(), name)
+				prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
+			}
 			prog.Send(cmdActiveMsg(-1))
 			_ = MarkInactive(sp)
 			prog.Send(instanceStoppedMsg{})
@@ -151,6 +276,46 @@ func (m *model) dispatchCommand(line string) {
 				}
 			}
 		}
+
+	case "ports":
+		m.printLine("$ ports")
+		if m.instance.Name == "" {
+			m.printLine("  no active instance")
+			break
+		}
+		if len(m.debugPorts) == 0 {
+			m.printLine("  no debug ports (is skaffold running in debug mode?)")
+			break
+		}
+		m.printLine("  Debug ports:")
+		for _, p := range m.debugPorts {
+			addr := p.Address
+			if addr == "" {
+				addr = "127.0.0.1"
+			}
+			m.printLine(fmt.Sprintf("    %-24s %s:%d  (%s)", p.ResourceName, addr, p.LocalPort, debugRuntime(p.PortName)))
+		}
+		m.printLine("")
+		m.printLine("  VSCode launch.json:")
+		m.printLine(`    {`)
+		m.printLine(`      "version": "0.2.0",`)
+		m.printLine(`      "configurations": [`)
+		for i, p := range m.debugPorts {
+			addr := p.Address
+			if addr == "" {
+				addr = "127.0.0.1"
+			}
+			comma := ","
+			if i == len(m.debugPorts)-1 {
+				comma = ""
+			}
+			for _, line := range vscodeLaunchConfig(p, addr) {
+				m.printLine("        " + line)
+			}
+			m.printLine("      }" + comma)
+		}
+		m.printLine(`      ]`)
+		m.printLine(`    }`)
 
 	case "theme":
 		m.printLine("$ " + line)
@@ -182,61 +347,21 @@ func (m *model) dispatchCommand(line string) {
 
 func (m *model) executeStartFromWizard() {
 	wiz := m.wizard
-	name := m.instanceName()
-	cpu := cpuOptions[wiz.cpuIdx]
-	ram := ramOptions[wiz.ramIdx]
-	mode := skaffoldModes[wiz.modeIdx]
 	sp := m.statePath
+	name := m.instanceName()
 
-	defs := []StepDef{
-		{
-			Step:  &MinikubeStep{CPU: cpu, RAM: ram},
-			Panel: PanelTopLeft,
-			Label: "Minikube",
-		},
-		{
-			Step:         &KubectlStep{},
-			Panel:        PanelTopLeft,
-			Label:        "kubectl",
-			WaitFor:      "minikube",
-			AutoActivate: true,
-			Hidden:       true,
-			OnReady:      func() { _ = MarkActive(sp) },
-		},
-	}
-
-	if m.cfg.GenerateSkaffold != nil {
-		path, err := m.cfg.GenerateSkaffold(wiz.selectedComps)
-		if err != nil {
-			prog.Send(commandLineMsg("skaffold generate error: " + err.Error()))
-			return
-		}
-		if path != "" {
-			defs = append(defs, StepDef{
-				Step:    &SkaffoldStep{Path: path, Mode: mode},
-				Panel:   PanelTopRight,
-				Label:   "Skaffold",
-				WaitFor: "minikube",
-			})
-		}
-	}
-
-	if mfeCmd := m.cfg.mfeCommand(wiz.selectedMFE); mfeCmd.Cmd != "" {
-		defs = append(defs, StepDef{
-			Step:  &MFEStep{Cmd: mfeCmd},
-			Panel: PanelBottomRight,
-			Label: "MFE",
-		})
+	values := wiz.buildValues()
+	defs, err := m.buildDefsFromTemplates(values)
+	if err != nil {
+		prog.Send(commandLineMsg("error: " + err.Error()))
+		return
 	}
 
 	// Persist wizard selections.
 	go func() {
 		_ = SaveInstanceState(sp, InstanceState{
-			CPU:        cpu,
-			RAM:        ram,
-			Components: wiz.selectedComps,
-			MFE:        wiz.selectedMFE,
-			Mode:       mode,
+			StringValues: values.str,
+			SliceValues:  values.strs,
 		})
 	}()
 
@@ -245,6 +370,11 @@ func (m *model) executeStartFromWizard() {
 	m.fullscreenTarget = 0
 	ctx := instanceCtx
 	for _, def := range defs {
+		// Truncate any existing log file before starting the watcher so that
+		// tail -F doesn't replay old content before Start creates a fresh one.
+		if lp := def.Step.LogPath(name); lp != "" {
+			_ = os.Truncate(lp, 0)
+		}
 		go watchStep(ctx, def, name)
 	}
 	m.executeStart(defs)

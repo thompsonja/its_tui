@@ -361,184 +361,269 @@ func (m model) renderWizard() string {
 func (m model) renderWizardCustom() string {
 	wiz := m.wizard
 	ws := currentWizStyles()
+	numFields := len(wiz.states)
 
 	var lines []string
-	lines = append(lines, "")
-	lines = append(lines, "  "+wizLabel("CPU", wiz.field, wizFieldCPU, 12)+"  "+horizSelector(wiz.cpuIdx, cpuOptions, wiz.field == wizFieldCPU, ws.hl, ws.sel, ws.dim))
-	lines = append(lines, "  "+wizLabel("RAM", wiz.field, wizFieldRAM, 12)+"  "+horizSelector(wiz.ramIdx, ramOptions, wiz.field == wizFieldRAM, ws.hl, ws.sel, ws.dim))
-	lines = append(lines, "")
+	lines = append(lines, "") // leading blank
 
-	// ── Components field ──────────────────────────────────────────────────────
-	compFocused := wiz.field == wizFieldComponents
-	if wiz.compPickerOpen {
-		lines = append(lines, "  "+ws.hl.Render(" Components "))
-		lines = append(lines, "  "+wiz.compPickerSearch.View())
-		const maxVisible = 8
-		start := 0
-		if wiz.compPickerIdx >= maxVisible {
-			start = wiz.compPickerIdx - maxVisible + 1
+	for i := range wiz.states {
+		s := &wiz.states[i]
+		focused := wiz.fieldIdx == i
+
+		// Blank line before field, except between consecutive Select fields.
+		if i > 0 {
+			prev := &wiz.states[i-1]
+			if !(s.spec.Kind == FieldKindSelect && prev.spec.Kind == FieldKindSelect) {
+				lines = append(lines, "")
+			}
 		}
-		end := min(len(wiz.compPickerItems), start+maxVisible)
-		if len(wiz.compPickerItems) == 0 {
-			lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
-		} else {
-			for i := start; i < end; i++ {
-				item := wiz.compPickerItems[i]
-				isFocused := i == wiz.compPickerIdx
-				if item.isSystem {
-					total, selected := 0, 0
-					for _, pi := range wiz.compPickerItems {
-						if !pi.isSystem && pi.system == item.system {
-							total++
-							if wiz.isCompSelected(pi.comp) {
-								selected++
+
+		switch s.spec.Kind {
+		case FieldKindSelect:
+			lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+
+				horizSelector(s.selectIdx, s.spec.Options, focused, ws.hl, ws.sel, ws.dim))
+
+		case FieldKindSystemSelect:
+			if s.pickerOpen {
+				lines = append(lines, "  "+ws.hl.Render(" "+s.spec.Label+" "))
+				lines = append(lines, "  "+s.pickerSearch.View())
+				const maxVisible = 8
+				start := 0
+				if s.pickerIdx >= maxVisible {
+					start = s.pickerIdx - maxVisible + 1
+				}
+				end := min(len(s.sysPickerItems), start+maxVisible)
+				if len(s.sysPickerItems) == 0 {
+					lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
+				} else {
+					for j := start; j < end; j++ {
+						item := s.sysPickerItems[j]
+						isFocused := j == s.pickerIdx
+						if item.isSystem {
+							total, selected := 0, 0
+							for _, pi := range s.sysPickerItems {
+								if !pi.isSystem && pi.system == item.system {
+									total++
+									if s.isMultiSelected(pi.comp) {
+										selected++
+									}
+								}
+							}
+							icon := "○"
+							if total > 0 && selected == total {
+								icon = "✓"
+							} else if selected > 0 {
+								icon = "◐"
+							}
+							text := fmt.Sprintf("%s %s  [%d/%d]", icon, item.system, selected, total)
+							if isFocused {
+								lines = append(lines, "  "+ws.hl.Render(text))
+							} else if selected > 0 {
+								lines = append(lines, "  "+ws.sel.Render(text))
+							} else {
+								lines = append(lines, "  "+ws.dim.Render(text))
+							}
+						} else {
+							isSelected := s.isMultiSelected(item.comp)
+							check := "○"
+							if isSelected {
+								check = "✓"
+							}
+							text := "  " + check + " " + item.comp
+							switch {
+							case isFocused:
+								lines = append(lines, "  "+ws.hl.Render(text))
+							case isSelected:
+								lines = append(lines, "  "+ws.sel.Render(text))
+							default:
+								lines = append(lines, "  "+ws.dim.Render(text))
 							}
 						}
 					}
-					icon := "○"
-					if total > 0 && selected == total {
-						icon = "✓"
-					} else if selected > 0 {
-						icon = "◐"
-					}
-					text := fmt.Sprintf("%s %s  [%d/%d]", icon, item.system, selected, total)
-					if isFocused {
-						lines = append(lines, "  "+ws.hl.Render(text))
-					} else if selected > 0 {
-						lines = append(lines, "  "+ws.sel.Render(text))
+				}
+			} else if focused {
+				for j, comp := range s.multiValues {
+					var rowPrefix string
+					if j == 0 {
+						rowPrefix = "  " + wizLabel(s.spec.Label, wiz.fieldIdx, i, 12) + "  "
 					} else {
-						lines = append(lines, "  "+ws.dim.Render(text))
+						rowPrefix = "  " + strings.Repeat(" ", 12) + "  "
 					}
+					if j == s.collapsedIdx {
+						lines = append(lines, rowPrefix+ws.hl.Render(" ✓ "+comp+" "))
+					} else {
+						lines = append(lines, rowPrefix+ws.sel.Render("✓ "+comp))
+					}
+				}
+				isAddFocused := s.collapsedIdx == len(s.multiValues)
+				var addBtn string
+				if isAddFocused {
+					addBtn = ws.hl.Render(" + Add ")
 				} else {
-					isSelected := wiz.isCompSelected(item.comp)
-					check := "○"
-					if isSelected {
-						check = "✓"
-					}
-					text := "  " + check + " " + item.comp
-					switch {
-					case isFocused:
-						lines = append(lines, "  "+ws.hl.Render(text))
-					case isSelected:
-						lines = append(lines, "  "+ws.sel.Render(text))
-					default:
-						lines = append(lines, "  "+ws.dim.Render(text))
-					}
+					addBtn = ws.dim.Render("[ + Add ]")
 				}
-			}
-		}
-	} else if compFocused {
-		for i, comp := range wiz.selectedComps {
-			var rowPrefix string
-			if i == 0 {
-				rowPrefix = "  " + wizLabel("Components", wiz.field, wizFieldComponents, 12) + "  "
+				if len(s.multiValues) == 0 {
+					lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+addBtn)
+				} else {
+					lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
+				}
 			} else {
-				rowPrefix = "  " + strings.Repeat(" ", 12) + "  "
+				var summary string
+				if len(s.multiValues) == 0 {
+					summary = ws.dim.Render("(none)")
+				} else {
+					summary = ws.sel.Render(strings.Join(s.multiValues, ", "))
+				}
+				lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+summary)
+				lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ + Add ]"))
 			}
-			if i == wiz.selectedIdx {
-				lines = append(lines, rowPrefix+ws.hl.Render(" ✓ "+comp+" "))
+
+		case FieldKindSingleSelect:
+			if s.pickerOpen {
+				lines = append(lines, "  "+ws.hl.Render(" "+s.spec.Label+" "))
+				lines = append(lines, "  "+s.pickerSearch.View())
+				const maxVisible = 6
+				start := 0
+				if s.pickerIdx >= maxVisible {
+					start = s.pickerIdx - maxVisible + 1
+				}
+				end := min(len(s.strPickerItems), start+maxVisible)
+				if len(s.strPickerItems) == 0 {
+					lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
+				} else {
+					for j := start; j < end; j++ {
+						opt := s.strPickerItems[j]
+						isFocused := j == s.pickerIdx
+						isSelected := opt == s.singleValue
+						check := "○"
+						if isSelected {
+							check = "●"
+						}
+						text := check + " " + opt
+						switch {
+						case isFocused:
+							lines = append(lines, "  "+ws.hl.Render(text))
+						case isSelected:
+							lines = append(lines, "  "+ws.sel.Render(text))
+						default:
+							lines = append(lines, "  "+ws.dim.Render(text))
+						}
+					}
+				}
 			} else {
-				lines = append(lines, rowPrefix+ws.sel.Render("✓ "+comp))
-			}
-		}
-		isAddFocused := wiz.selectedIdx == len(wiz.selectedComps)
-		var addBtn string
-		if isAddFocused {
-			addBtn = ws.hl.Render(" + Add ")
-		} else {
-			addBtn = ws.dim.Render("[ + Add ]")
-		}
-		if len(wiz.selectedComps) == 0 {
-			lines = append(lines, "  "+wizLabel("Components", wiz.field, wizFieldComponents, 12)+"  "+addBtn)
-		} else {
-			lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
-		}
-	} else {
-		var summary string
-		if len(wiz.selectedComps) == 0 {
-			summary = ws.dim.Render("(none)")
-		} else {
-			summary = ws.sel.Render(strings.Join(wiz.selectedComps, ", "))
-		}
-		lines = append(lines, "  "+wizLabel("Components", wiz.field, wizFieldComponents, 12)+"  "+summary)
-		lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ + Add ]"))
-	}
-	lines = append(lines, "")
-
-	// ── MFE field ─────────────────────────────────────────────────────────────
-	mfeFocused := wiz.field == wizFieldMFE
-	if wiz.mfePickerOpen {
-		lines = append(lines, "  "+ws.hl.Render(" MFE "))
-		lines = append(lines, "  "+wiz.mfePickerSearch.View())
-		const maxVisible = 6
-		start := 0
-		if wiz.mfePickerIdx >= maxVisible {
-			start = wiz.mfePickerIdx - maxVisible + 1
-		}
-		end := min(len(wiz.mfePickerItems), start+maxVisible)
-		if len(wiz.mfePickerItems) == 0 {
-			lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
-		} else {
-			for i := start; i < end; i++ {
-				mfe := wiz.mfePickerItems[i]
-				isFocused := i == wiz.mfePickerIdx
-				isSelected := mfe == wiz.selectedMFE
-				check := "○"
-				if isSelected {
-					check = "●"
+				var display string
+				if s.singleValue == "" {
+					display = ws.dim.Render("(none)")
+				} else if focused {
+					display = ws.sel.Render(s.singleValue)
+				} else {
+					display = ws.dim.Render(s.singleValue)
 				}
-				text := check + " " + mfe
-				switch {
-				case isFocused:
-					lines = append(lines, "  "+ws.hl.Render(text))
-				case isSelected:
-					lines = append(lines, "  "+ws.sel.Render(text))
-				default:
-					lines = append(lines, "  "+ws.dim.Render(text))
+				lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+display)
+				if focused && len(s.spec.Options) > 0 {
+					lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ Enter to select ]"))
 				}
 			}
-		}
-	} else {
-		var mfeDisplay string
-		if wiz.selectedMFE == "" {
-			mfeDisplay = ws.dim.Render("(none)")
-		} else if mfeFocused {
-			mfeDisplay = ws.sel.Render(wiz.selectedMFE)
-		} else {
-			mfeDisplay = ws.dim.Render(wiz.selectedMFE)
-		}
-		lines = append(lines, "  "+wizLabel("MFE", wiz.field, wizFieldMFE, 12)+"  "+mfeDisplay)
-		if mfeFocused && len(wiz.mfeAll) > 0 {
-			lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ Enter to select ]"))
+
+		case FieldKindMultiSelect:
+			if s.pickerOpen {
+				lines = append(lines, "  "+ws.hl.Render(" "+s.spec.Label+" "))
+				lines = append(lines, "  "+s.pickerSearch.View())
+				const maxVisible = 6
+				start := 0
+				if s.pickerIdx >= maxVisible {
+					start = s.pickerIdx - maxVisible + 1
+				}
+				end := min(len(s.strPickerItems), start+maxVisible)
+				if len(s.strPickerItems) == 0 {
+					lines = append(lines, "  "+ws.dim.Render("  (no matches)"))
+				} else {
+					for j := start; j < end; j++ {
+						opt := s.strPickerItems[j]
+						isFocused := j == s.pickerIdx
+						isSelected := s.isMultiSelected(opt)
+						check := "○"
+						if isSelected {
+							check = "✓"
+						}
+						text := check + " " + opt
+						switch {
+						case isFocused:
+							lines = append(lines, "  "+ws.hl.Render(text))
+						case isSelected:
+							lines = append(lines, "  "+ws.sel.Render(text))
+						default:
+							lines = append(lines, "  "+ws.dim.Render(text))
+						}
+					}
+				}
+			} else if focused {
+				for j, v := range s.multiValues {
+					var rowPrefix string
+					if j == 0 {
+						rowPrefix = "  " + wizLabel(s.spec.Label, wiz.fieldIdx, i, 12) + "  "
+					} else {
+						rowPrefix = "  " + strings.Repeat(" ", 12) + "  "
+					}
+					if j == s.collapsedIdx {
+						lines = append(lines, rowPrefix+ws.hl.Render(" ✓ "+v+" "))
+					} else {
+						lines = append(lines, rowPrefix+ws.sel.Render("✓ "+v))
+					}
+				}
+				isAddFocused := s.collapsedIdx == len(s.multiValues)
+				var addBtn string
+				if isAddFocused {
+					addBtn = ws.hl.Render(" + Add ")
+				} else {
+					addBtn = ws.dim.Render("[ + Add ]")
+				}
+				if len(s.multiValues) == 0 {
+					lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+addBtn)
+				} else {
+					lines = append(lines, "  "+strings.Repeat(" ", 16)+addBtn)
+				}
+			} else {
+				var summary string
+				if len(s.multiValues) == 0 {
+					summary = ws.dim.Render("(none)")
+				} else {
+					summary = ws.sel.Render(strings.Join(s.multiValues, ", "))
+				}
+				lines = append(lines, "  "+wizLabel(s.spec.Label, wiz.fieldIdx, i, 12)+"  "+summary)
+				lines = append(lines, "  "+strings.Repeat(" ", 16)+ws.dim.Render("[ + Add ]"))
+			}
 		}
 	}
+
+	lines = append(lines, "")
+	lines = append(lines, "")
+	lines = append(lines, wizardButtons(wiz.fieldIdx == numFields, wiz.confirmIdx, ws.hl))
 	lines = append(lines, "")
 
-	lines = append(lines, "  "+wizLabel("Mode", wiz.field, wizFieldMode, 12)+"  "+horizSelector(wiz.modeIdx, skaffoldModes, wiz.field == wizFieldMode, ws.hl, ws.sel, ws.dim))
-	lines = append(lines, "")
-	lines = append(lines, "")
-	lines = append(lines, wizardButtons(wiz.field == wizFieldButtons, wiz.confirmIdx, ws.hl))
-	lines = append(lines, "")
-
+	// Hint text based on the current field kind.
 	var hintText string
-	switch {
-	case wiz.compPickerOpen:
-		hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
-	case wiz.mfePickerOpen:
-		hintText = "  ↑↓ navigate  ·  Enter select  ·  type to search  ·  Tab done"
-	case wiz.field == wizFieldCPU || wiz.field == wizFieldRAM:
-		hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case wiz.field == wizFieldComponents:
-		hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
-	case wiz.field == wizFieldMFE:
-		if len(wiz.mfeAll) > 0 {
-			hintText = "  Enter to pick  ·  x clear  ·  ↑↓ or Tab to move  ·  Esc cancel"
-		} else {
-			hintText = "  ↑↓ or Tab to move  ·  Esc cancel"
+	if wiz.fieldIdx < numFields {
+		s := &wiz.states[wiz.fieldIdx]
+		switch {
+		case s.pickerOpen && s.spec.Kind == FieldKindSystemSelect:
+			hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
+		case s.pickerOpen && (s.spec.Kind == FieldKindSingleSelect || s.spec.Kind == FieldKindMultiSelect):
+			hintText = "  ↑↓ navigate  ·  Enter select  ·  type to search  ·  Tab done"
+		case s.spec.Kind == FieldKindSelect:
+			hintText = "  ←→ select  ·  ↑↓ or Tab to move  ·  Esc cancel"
+		case s.spec.Kind == FieldKindSystemSelect:
+			hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
+		case s.spec.Kind == FieldKindSingleSelect:
+			if len(s.spec.Options) > 0 {
+				hintText = "  Enter to pick  ·  x clear  ·  ↑↓ or Tab to move  ·  Esc cancel"
+			} else {
+				hintText = "  ↑↓ or Tab to move  ·  Esc cancel"
+			}
+		case s.spec.Kind == FieldKindMultiSelect:
+			hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
 		}
-	case wiz.field == wizFieldMode:
-		hintText = "  ←→ select mode  ·  ↑↓ or Tab to move  ·  Esc cancel"
-	case wiz.field == wizFieldButtons:
+	} else {
 		hintText = "  ←→ select  ·  Enter confirm  ·  Esc cancel"
 	}
 	lines = append(lines, ws.hint.Render(hintText))
@@ -579,6 +664,7 @@ func helpContent(width int) string {
 		{"start", "start the instance"},
 		{"stop", "stop instance + delete cluster"},
 		{"logs", "show log file paths"},
+		{"ports", "show debug ports + VSCode launch.json"},
 		{"theme [name]", "set color theme"},
 		{"", ""},
 		{"Enter", "run command"},
