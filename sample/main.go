@@ -25,12 +25,39 @@ func main() {
 		Steps: []tui.StepTemplate{
 			tui.MinikubeTemplate(),
 			tui.KubectlTemplate(),
+			// env step: contributes the "env" selector field to the wizard.
+			// It does not start a process of its own — the selected value is
+			// read by the skaffold generate callback below and forwarded as a
+			// --profile flag to skaffold.
+			{
+				ID:     "env",
+				Panel:  tui.PanelTopLeft,
+				Label:  "Environment",
+				Hidden: true,
+				Fields: []tui.FieldSpec{
+					{
+						ID:      "env",
+						Label:   "Environment",
+						Kind:    tui.FieldKindSelect,
+						Options: []string{"dev", "test"},
+						Default: 0,
+					},
+				},
+				Build: func(v tui.WizardValues) (tui.Step, error) {
+					return nil, nil
+				},
+			},
 			tui.SkaffoldTemplate(
-				func(components []string, mode string) (string, error) {
-					// A real implementation would generate a skaffold.yaml from
-					// the selected components and mode. Here we return the static
-					// sample file for demonstration purposes.
-					return filepath.Join(sampleDir(), "skaffold.yaml"), nil
+				func(v tui.WizardValues) (string, []string, error) {
+					// Map the selected environment to a skaffold profile.
+					// The skaffold.yaml defines matching "dev" and "test" profiles
+					// that set APP_ENV on the deployed container accordingly.
+					env := v.String("env")
+					var profiles []string
+					if env != "" {
+						profiles = []string{env}
+					}
+					return filepath.Join(sampleDir(), "skaffold.yaml"), profiles, nil
 				},
 				[]tui.System{
 					{
@@ -78,11 +105,12 @@ func main() {
 					"analytics-mfe",
 				},
 				// RunMFE maps every MFE name to the sample mfe/ directory.
-				// A real implementation would map each name to its own repo.
+				// The MFE calls GET /hello on the port-forwarded service and
+				// displays the message returned by the Go server.
 				func(name string) tui.MFECommand {
 					return tui.MFECommand{
-						Cmd:  "npm",
-						Args: []string{"start"},
+						Cmd:  "node",
+						Args: []string{"index.js"},
 						Dir:  filepath.Join(sampleDir(), "mfe"),
 					}
 				},

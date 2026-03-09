@@ -15,3 +15,18 @@ manifests:
   rawYaml:
     - k8s/deployment.yaml
     - k8s/service.yaml
+
+portForward:
+  - resourceType: Service
+    resourceName: hello-world
+    port: 8080
+    localPort: 9001
+
+profiles:
+  - name: dev
+    # Uses the base manifests — APP_ENV=dev is set in deployment.yaml
+  - name: test
+    manifests:
+      rawYaml:
+        - k8s/deployment-test.yaml
+        - k8s/service.yaml

@@ -19,8 +19,9 @@ import (
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
 // It depends on minikube being ready before Start is called.
 type SkaffoldStep struct {
-	Path string // path to skaffold.yaml
-	Mode string // "dev", "run", or "debug"; defaults to "dev"
+	Path     string   // path to skaffold.yaml
+	Mode     string   // "dev", "run", or "debug"; defaults to "dev"
+	Profiles []string // optional skaffold profiles to activate (--profile flags)
 }
 
 func (s *SkaffoldStep) ID() string                { return "skaffold" }
@@ -30,10 +31,14 @@ func (s *SkaffoldStep) ReadConfig(cfg config.InstanceConfig) {
 	if cfg.Skaffold.Path != "" {
 		s.Path = cfg.Skaffold.Path
 	}
+	if len(cfg.Skaffold.Profiles) > 0 {
+		s.Profiles = cfg.Skaffold.Profiles
+	}
 }
 
 func (s *SkaffoldStep) WriteConfig(cfg *config.InstanceConfig) {
 	cfg.Skaffold.Path = s.Path
+	cfg.Skaffold.Profiles = s.Profiles
 }
 
 // Start launches skaffold and blocks until it signals readiness:
@@ -68,7 +73,11 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 // exits. A zero exit code is treated as "ready/done"; non-zero is an error.
 func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath string) error {
 	defer lf.Close()
-	cmd := exec.CommandContext(ctx, "skaffold", "run", "--filename", absPath)
+	args := []string{"run", "--filename", absPath}
+	for _, p := range s.Profiles {
+		args = append(args, "--profile", p)
+	}
+	cmd := exec.CommandContext(ctx, "skaffold", args...)
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
@@ -92,10 +101,11 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 		return fmt.Errorf("finding free port: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "skaffold", mode,
-		"--filename", absPath,
-		"--rpc-http-port", strconv.Itoa(port),
-	)
+	args := []string{mode, "--filename", absPath, "--rpc-http-port", strconv.Itoa(port)}
+	for _, p := range s.Profiles {
+		args = append(args, "--profile", p)
+	}
+	cmd := exec.CommandContext(ctx, "skaffold", args...)
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.Stdout = lf
 	cmd.Stderr = lf

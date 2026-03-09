@@ -350,6 +350,7 @@ func (m *model) executeStartFromWizard() {
 	sp := m.statePath
 	name := m.instanceName()
 
+	m.printLine("$ start")
 	values := wiz.buildValues()
 	defs, err := m.buildDefsFromTemplates(values)
 	if err != nil {

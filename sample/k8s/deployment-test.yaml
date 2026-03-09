@@ -17,6 +17,6 @@ spec:
           image: hello-world
           env:
             - name: APP_ENV
-              value: dev
+              value: test
           ports:
             - containerPort: 8080

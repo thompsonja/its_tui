@@ -50,12 +50,15 @@ func KubectlTemplate() StepTemplate {
 
 // SkaffoldTemplate returns a StepTemplate for skaffold.
 //
-// generate is called with the selected component names and mode ("dev", "run",
-// or "debug") and should return the path to a skaffold.yaml. Returning an
-// empty path skips the step; returning an error aborts the wizard.
+// generate is called with the full wizard values and should return the path to
+// a skaffold.yaml and an optional list of skaffold profiles to activate.
+// Returning an empty path skips the step; returning an error aborts the wizard.
+// The wizard values include the "components" ([]string) and "mode" fields
+// contributed by this template, as well as any fields from other templates in
+// the pipeline (e.g. an "env" field from a companion step).
 //
 // systems provides the hierarchical system/component data shown in the wizard.
-func SkaffoldTemplate(generate func(components []string, mode string) (string, error), systems []System) StepTemplate {
+func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error), systems []System) StepTemplate {
 	return StepTemplate{
 		ID:    "skaffold",
 		Panel: PanelTopRight,
@@ -79,14 +82,14 @@ func SkaffoldTemplate(generate func(components []string, mode string) (string, e
 			if mode == "" {
 				mode = "dev"
 			}
-			path, err := generate(v.Strings("components"), mode)
+			path, profiles, err := generate(v)
 			if err != nil {
 				return nil, err
 			}
 			if path == "" {
 				return nil, nil
 			}
-			return &SkaffoldStep{Path: path, Mode: mode}, nil
+			return &SkaffoldStep{Path: path, Mode: mode, Profiles: profiles}, nil
 		},
 	}
 }

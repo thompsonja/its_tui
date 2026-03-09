@@ -29,7 +29,8 @@ type MinikubeConfig struct {
 
 // SkaffoldConfig holds the skaffold pipeline configuration.
 type SkaffoldConfig struct {
-	Path string `yaml:"path"` // path to skaffold.yaml
+	Path     string   `yaml:"path"`               // path to skaffold.yaml
+	Profiles []string `yaml:"profiles,omitempty"` // skaffold profiles to activate
 }
 
 // MFEConfig holds the micro-frontend configuration.
