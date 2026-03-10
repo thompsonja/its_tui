@@ -13,7 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"tui/config"
+	"github.com/thompsonja/its_tui/config"
 )
 
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.

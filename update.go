@@ -4,8 +4,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"tui/config"
-	"tui/step"
+	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // flipStep controls animation speed: how much flipProgress advances per 60fps tick.

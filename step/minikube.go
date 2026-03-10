@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"tui/config"
+	"github.com/thompsonja/its_tui/config"
 )
 
 // MinikubeStep manages a minikube cluster: start and teardown via `minikube delete`.

@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"tui"
+	"github.com/thompsonja/its_tui"
 )
 
 // sampleDir returns the directory containing this source file, so that

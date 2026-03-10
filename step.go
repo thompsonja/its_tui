@@ -2,7 +2,7 @@ package tui
 
 import (
 	"context"
-	"tui/step"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // watchStep tails the step's log file and forwards each line to the step's panel.

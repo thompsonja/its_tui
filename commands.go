@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"tui/step"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // copyToClipboard writes text to the system clipboard by piping to the first

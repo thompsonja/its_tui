@@ -6,7 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
-	"tui/config"
+	"github.com/thompsonja/its_tui/config"
 )
 
 // MFEStep runs a micro-frontend command and streams output to the MFE panel.

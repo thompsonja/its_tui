@@ -7,7 +7,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
-	"tui/step"
+	"github.com/thompsonja/its_tui/step"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

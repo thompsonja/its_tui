@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"tui/config"
-	"tui/step"
+	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // ── Type aliases — package code uses these names without a config/step prefix ─
