@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"syscall"
 	"tui/config"
 )
@@ -21,23 +20,6 @@ type MFEStep struct {
 func (s *MFEStep) ID() string             { return "mfe" }
 func (s *MFEStep) LogPath(name string) string { return config.MfeLogPath(name) }
 
-// ReadConfig reads the MFE working directory from cfg.MFE.Path, constructing
-// a default `npm start` command. Does nothing when cfg.MFE.Path is empty.
-func (s *MFEStep) ReadConfig(cfg config.InstanceConfig) {
-	if cfg.MFE.Path != "" {
-		s.Cmd = MFECommand{
-			Cmd:  "npm",
-			Args: []string{"start"},
-			Dir:  filepath.Dir(cfg.MFE.Path),
-		}
-	}
-}
-
-// WriteConfig writes the MFE working directory back into cfg.MFE.Path.
-func (s *MFEStep) WriteConfig(cfg *config.InstanceConfig) {
-	cfg.MFE.Path = s.Cmd.Dir
-}
-
 // Start launches the MFE command and returns once the process is running.
 // The process runs in the background and is killed when ctx is cancelled.
 func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
@@ -49,6 +31,12 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 	cmd := exec.Command(s.Cmd.Cmd, s.Cmd.Args...)
 	cmd.Dir = s.Cmd.Dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if len(s.Cmd.Env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range s.Cmd.Env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
 	cmd.Stdout = lf
 	cmd.Stderr = lf
 

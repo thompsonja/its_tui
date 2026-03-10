@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -28,7 +29,9 @@ const (
 	overlayWizard             // start-instance wizard
 )
 
-const maxBufLines = 1000
+const maxBufLines = 5000
+
+var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 // panelView holds the steps and log buffers for one content panel.
 type panelView struct {
@@ -50,9 +53,9 @@ type model struct {
 	ready         bool
 	focused       int
 
-	cfg       Config   // library configuration provided by the caller
-	instance  Instance
-	statePath string   // path to state.json
+	cfg          Config  // library configuration provided by the caller
+	instanceName string  // name of the currently running instance; "" when stopped
+	statePath    string  // path to state.json
 
 	// Content panels: index by PanelID (0=TopLeft, 1=TopRight, 2=BottomRight).
 	panels   [3]panelView
@@ -84,15 +87,43 @@ type model struct {
 	runningCmds int
 	spinnerTick int
 
-	// debugPorts collects port-forward events from skaffold debug.
+	// fwdPorts collects forwarded service ports; debugPorts collects debug ports.
+	// When non-empty, virtual tabs are appended to the skaffold panel.
+	fwdPorts   []step.DebugPortMsg
 	debugPorts []step.DebugPortMsg
+	portsVP    viewport.Model // viewport for the virtual Ports tab (forwarded ports)
+	debugVP    viewport.Model // viewport for the virtual Debug tab (debug ports)
+
+	// flash shows a brief success/error notification inside the Ports tab.
+	flashMsg   string
+	flashOk    bool
+	flashUntil int // spinnerTick value at which the flash is cleared
+
+	// test runner — virtual Tests tab on BottomRight panel.
+	testBuf     []string
+	testVP      viewport.Model
+	testRunning bool
 
 	// steps tracks in-progress operations shown as spinner lines in the commands panel.
 	steps map[string]*commandStep
+
+	// stepCtxs holds per-step contexts for individual step cancellation.
+	stepCtxs map[string]stepEntry
+
+	// searchMode indicates panel log search is active.
+	searchMode  bool
+	searchQuery string
+	searchInput textinput.Model
 }
 
-// instanceName returns the configured instance name, falling back to the default.
-func (m *model) instanceName() string {
+// stepEntry holds the context and cancel function for a single step goroutine.
+type stepEntry struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// configuredName returns the instance name from Config, falling back to the default.
+func (m *model) configuredName() string {
 	if m.cfg.InstanceName != "" {
 		return m.cfg.InstanceName
 	}
@@ -105,10 +136,15 @@ func newModel(cfg Config) model {
 	ti.CharLimit = 512
 	ti.Focus()
 
+	si := textinput.New()
+	si.Placeholder = "search..."
+	si.CharLimit = 128
+
 	return model{
 		cfg:                cfg,
 		focused:            panelCommands,
 		input:              ti,
+		searchInput:        si,
 		historyIdx:         -1,
 		fullscreenProgress: 1.0,
 		fullscreenTarget:   1.0,

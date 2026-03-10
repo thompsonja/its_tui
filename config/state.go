@@ -20,13 +20,25 @@ type State struct {
 // StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
 // the MFE process starts. Instance is nil when nothing is running.
 type InstanceState struct {
-	StartedAt    string              `json:"started_at,omitempty"`
-	MFEPGID      int                 `json:"mfe_pgid,omitempty"`
-	StringValues map[string]string   `json:"string_values,omitempty"`
-	SliceValues  map[string][]string `json:"slice_values,omitempty"`
+	StartedAt       string              `json:"started_at,omitempty"`
+	MFEPGID         int                 `json:"mfe_pgid,omitempty"`
+	StringValues    map[string]string   `json:"string_values,omitempty"`
+	SliceValues     map[string][]string `json:"slice_values,omitempty"`
+	DebugPorts      []DebugPort         `json:"debug_ports,omitempty"`
+	ForwardedPorts  []DebugPort         `json:"forwarded_ports,omitempty"`
 }
 
-const maxHistoryLen = 10
+// DebugPort records one forwarded debug port from skaffold debug.
+// It mirrors step.DebugPortMsg but lives in config to avoid a circular import.
+type DebugPort struct {
+	LocalPort    int    `json:"local_port"`
+	RemotePort   int    `json:"remote_port,omitempty"`
+	ResourceName string `json:"resource_name,omitempty"`
+	PortName     string `json:"port_name,omitempty"`
+	Address      string `json:"address,omitempty"`
+}
+
+const maxHistoryLen = 200
 
 // AppendCommandHistory adds line to the persisted command history, keeping the
 // last maxHistoryLen entries.
@@ -121,6 +133,33 @@ func SaveMFEPGID(statePath string, pgid int) error {
 		s.Instance = &InstanceState{}
 	}
 	s.Instance.MFEPGID = pgid
+	return SaveState(statePath, s)
+}
+
+// SaveDebugPorts persists the current debug port list into the running instance state.
+func SaveDebugPorts(statePath string, ports []DebugPort) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	if s.Instance == nil {
+		s.Instance = &InstanceState{}
+	}
+	s.Instance.DebugPorts = ports
+	return SaveState(statePath, s)
+}
+
+// SavePorts persists both forwarded service ports and debug ports into the running instance state.
+func SavePorts(statePath string, fwd, dbg []DebugPort) error {
+	s, err := LoadState(statePath)
+	if err != nil {
+		return err
+	}
+	if s.Instance == nil {
+		s.Instance = &InstanceState{}
+	}
+	s.Instance.ForwardedPorts = fwd
+	s.Instance.DebugPorts = dbg
 	return SaveState(statePath, s)
 }
 

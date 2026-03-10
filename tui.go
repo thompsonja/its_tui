@@ -14,6 +14,7 @@ import (
 
 type (
 	InstanceState  = config.InstanceState
+	DebugPort      = config.DebugPort
 	ComponentsFile = config.ComponentsFile
 	System         = config.System
 	Component      = config.Component
@@ -37,6 +38,8 @@ var (
 	MarkActive           = config.MarkActive
 	MarkInactive         = config.MarkInactive
 	SaveMFEPGID          = config.SaveMFEPGID
+	SaveDebugPorts       = config.SaveDebugPorts
+	SavePorts            = config.SavePorts
 	SaveTheme            = config.SaveTheme
 	AppendCommandHistory = config.AppendCommandHistory
 	DefaultStatePath     = config.DefaultStatePath
@@ -101,6 +104,7 @@ const (
 	FieldKindSingleSelect                  // searchable single-choice picker (e.g. MFE)
 	FieldKindMultiSelect                   // searchable multi-choice picker
 	FieldKindSystemSelect                  // hierarchical system/component picker
+	FieldKindText                          // free-text input field
 )
 
 // FieldSpec describes one user-configurable wizard field.
@@ -124,6 +128,19 @@ func (v WizardValues) String(id string) string { return v.str[id] }
 
 // Strings returns the slice value for the field with the given ID.
 func (v WizardValues) Strings(id string) []string { return v.strs[id] }
+
+// NewWizardValues constructs a WizardValues from explicit maps.
+// Useful in tests and in Build functions that delegate to sub-builders.
+// Nil maps are treated as empty.
+func NewWizardValues(str map[string]string, strs map[string][]string) WizardValues {
+	if str == nil {
+		str = map[string]string{}
+	}
+	if strs == nil {
+		strs = map[string][]string{}
+	}
+	return WizardValues{str: str, strs: strs}
+}
 
 // ── Step template ─────────────────────────────────────────────────────────────
 
@@ -172,6 +189,27 @@ type StepTemplate struct {
 	StopLabel string
 }
 
+// ── Test templates ────────────────────────────────────────────────────────────
+
+// TestCommand describes a test process to run against the running instance.
+type TestCommand struct {
+	Cmd  string
+	Args []string
+	Dir  string
+	Env  map[string]string // merged with os.Environ
+}
+
+// TestTemplate describes one runnable test suite.
+// Tests appear as a virtual "Tests" tab on the BottomRight panel and are
+// triggered via the `test [label]` REPL command.
+type TestTemplate struct {
+	// Label identifies the test suite in the REPL and the tab title.
+	Label string
+
+	// Build constructs the TestCommand from the current wizard values.
+	Build func(WizardValues) (TestCommand, error)
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 
 // Config holds the configuration provided by the caller when starting the TUI.
@@ -182,6 +220,15 @@ type Config struct {
 
 	// Steps is the ordered list of step templates that define the pipeline.
 	Steps []StepTemplate
+
+	// Tests is the optional list of test suites runnable via the `test` command.
+	// When non-empty a virtual "Tests" tab appears on the BottomRight panel.
+	Tests []TestTemplate
+
+	// StatusLine, if set, is called each frame to produce the top bar text.
+	// The argument is the currently running instance name (empty when stopped).
+	// Defaults to showing the instance name, or "no instance running" when empty.
+	StatusLine func(instanceName string) string
 }
 
 // ── Runtime globals ───────────────────────────────────────────────────────────
@@ -196,6 +243,10 @@ var (
 	instanceCtx    context.Context
 	cancelInstance context.CancelFunc
 )
+
+// cancelTest stops any in-progress test run. Initialised to a no-op so it is
+// always safe to call without a nil check.
+var cancelTest context.CancelFunc = func() {}
 
 // validateTemplates checks the template list for structural problems that would
 // cause silent failures at runtime. It is called at the top of Run.
@@ -230,10 +281,26 @@ func validateTemplates(steps []StepTemplate) error {
 	return nil
 }
 
+func validateTests(tests []TestTemplate) error {
+	for _, t := range tests {
+		if t.Build == nil {
+			label := t.Label
+			if label == "" {
+				label = "(unlabeled)"
+			}
+			return fmt.Errorf("test template %q has nil Build function", label)
+		}
+	}
+	return nil
+}
+
 // Run starts the TUI with the given configuration. It blocks until the user
 // exits and returns any error from the bubbletea runtime.
 func Run(cfg Config) error {
 	if err := validateTemplates(cfg.Steps); err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := validateTests(cfg.Tests); err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
@@ -263,12 +330,30 @@ func Run(cfg Config) error {
 	var restoreDefs []StepDef
 	var restoreName string
 	if state.Instance != nil && state.Instance.StartedAt != "" {
-		restoreName = m.instanceName()
-		m.instance.Name = restoreName
+		restoreName = m.configuredName()
+		m.instanceName = restoreName
 		m.fullscreenProgress = 0
 		m.fullscreenTarget = 0
 		restoreDefs = m.buildPipelineFromState(restoreName, state.Instance)
 		m.registerPipeline(restoreDefs)
+		for _, dp := range state.Instance.ForwardedPorts {
+			m.fwdPorts = append(m.fwdPorts, step.DebugPortMsg{
+				LocalPort:    dp.LocalPort,
+				RemotePort:   dp.RemotePort,
+				ResourceName: dp.ResourceName,
+				PortName:     dp.PortName,
+				Address:      dp.Address,
+			})
+		}
+		for _, dp := range state.Instance.DebugPorts {
+			m.debugPorts = append(m.debugPorts, step.DebugPortMsg{
+				LocalPort:    dp.LocalPort,
+				RemotePort:   dp.RemotePort,
+				ResourceName: dp.ResourceName,
+				PortName:     dp.PortName,
+				Address:      dp.Address,
+			})
+		}
 	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())

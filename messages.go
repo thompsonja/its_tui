@@ -27,4 +27,16 @@ type (
 	// cmdActiveMsg adjusts the count of running background commands.
 	// Send +1 when a command starts, -1 when it finishes.
 	cmdActiveMsg int
+
+	// copyResultMsg is sent after a clipboard copy attempt.
+	copyResultMsg struct {
+		ok  bool
+		msg string
+	}
+
+	// testLineMsg carries one line of streaming test output.
+	testLineMsg string
+
+	// testDoneMsg signals that a test run has completed.
+	testDoneMsg struct{ ok bool }
 )

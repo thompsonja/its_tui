@@ -27,20 +27,6 @@ type SkaffoldStep struct {
 func (s *SkaffoldStep) ID() string                { return "skaffold" }
 func (s *SkaffoldStep) LogPath(name string) string { return config.SkaffoldLogPath(name) }
 
-func (s *SkaffoldStep) ReadConfig(cfg config.InstanceConfig) {
-	if cfg.Skaffold.Path != "" {
-		s.Path = cfg.Skaffold.Path
-	}
-	if len(cfg.Skaffold.Profiles) > 0 {
-		s.Profiles = cfg.Skaffold.Profiles
-	}
-}
-
-func (s *SkaffoldStep) WriteConfig(cfg *config.InstanceConfig) {
-	cfg.Skaffold.Path = s.Path
-	cfg.Skaffold.Profiles = s.Profiles
-}
-
 // Start launches skaffold and blocks until it signals readiness:
 //   - run mode: blocks until the process exits (success = ready, failure = error).
 //   - dev/debug mode: blocks until the first successful deploy is detected via

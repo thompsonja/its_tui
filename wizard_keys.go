@@ -182,6 +182,16 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 			}
 		}
 
+	case FieldKindText:
+		switch key {
+		case "up":
+			prev()
+		case "down", "enter":
+			next()
+		default:
+			s.pickerSearch, _ = s.pickerSearch.Update(msg)
+		}
+
 	case FieldKindMultiSelect:
 		if s.pickerOpen {
 			switch key {

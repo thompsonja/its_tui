@@ -62,6 +62,8 @@ func (w *startWizard) buildValues() WizardValues {
 			}
 		case FieldKindMultiSelect, FieldKindSystemSelect:
 			v.strs[s.spec.ID] = s.multiValues
+		case FieldKindText:
+			v.str[s.spec.ID] = s.pickerSearch.Value()
 		}
 	}
 	return v
@@ -221,6 +223,8 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			if vals := initial.Strings(spec.ID); len(vals) > 0 {
 				s.multiValues = append([]string(nil), vals...)
 			}
+		case FieldKindText:
+			// pre-populated below in the setup switch
 		}
 
 		// Set up picker search inputs and initial item lists.
@@ -242,6 +246,14 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			search.Width = inputW
 			s.pickerSearch = search
 			s.strPickerItems = append([]string(nil), spec.Options...)
+		case FieldKindText:
+			ti := textinput.New()
+			ti.Placeholder = "…"
+			ti.Width = inputW
+			if v := initial.String(spec.ID); v != "" {
+				ti.SetValue(v)
+			}
+			s.pickerSearch = ti
 		}
 		states[i] = s
 	}
@@ -257,6 +269,14 @@ func (w *startWizard) syncFocus() {
 	for i := range w.states {
 		s := &w.states[i]
 		if s.spec.Kind == FieldKindSelect {
+			continue
+		}
+		if s.spec.Kind == FieldKindText {
+			if i == w.fieldIdx {
+				s.pickerSearch.Focus()
+			} else {
+				s.pickerSearch.Blur()
+			}
 			continue
 		}
 		if i == w.fieldIdx && s.pickerOpen {

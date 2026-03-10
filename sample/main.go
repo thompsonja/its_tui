@@ -25,10 +25,9 @@ func main() {
 		Steps: []tui.StepTemplate{
 			tui.MinikubeTemplate(),
 			tui.KubectlTemplate(),
-			// env step: contributes the "env" selector field to the wizard.
-			// It does not start a process of its own — the selected value is
-			// read by the skaffold generate callback below and forwarded as a
-			// --profile flag to skaffold.
+			// env step: contributes the "env" and "api_port" selector fields to
+			// the wizard. It does not start a process of its own — the selected
+			// values are read by the skaffold generate callback below.
 			{
 				ID:     "env",
 				Panel:  tui.PanelTopLeft,
@@ -42,6 +41,13 @@ func main() {
 						Options: []string{"dev", "test"},
 						Default: 0,
 					},
+					{
+						ID:      "api_port",
+						Label:   "API Port",
+						Kind:    tui.FieldKindSelect,
+						Options: []string{"9001", "9002", "9003"},
+						Default: 0,
+					},
 				},
 				Build: func(v tui.WizardValues) (tui.Step, error) {
 					return nil, nil
@@ -49,15 +55,13 @@ func main() {
 			},
 			tui.SkaffoldTemplate(
 				func(v tui.WizardValues) (string, []string, error) {
-					// Map the selected environment to a skaffold profile.
-					// The skaffold.yaml defines matching "dev" and "test" profiles
-					// that set APP_ENV on the deployed container accordingly.
+					// Generate a skaffold.yaml with the selected port and env profile.
 					env := v.String("env")
-					var profiles []string
-					if env != "" {
-						profiles = []string{env}
+					port := v.String("api_port")
+					if port == "" {
+						port = "9001"
 					}
-					return filepath.Join(sampleDir(), "skaffold.yaml"), profiles, nil
+					return generateSkaffoldYAML(sampleDir(), env, port)
 				},
 				[]tui.System{
 					{
@@ -107,14 +111,36 @@ func main() {
 				// RunMFE maps every MFE name to the sample mfe/ directory.
 				// The MFE calls GET /hello on the port-forwarded service and
 				// displays the message returned by the Go server.
-				func(name string) tui.MFECommand {
+				func(name string, v tui.WizardValues) tui.MFECommand {
+					port := v.String("api_port")
+					if port == "" {
+						port = "9001"
+					}
 					return tui.MFECommand{
 						Cmd:  "node",
 						Args: []string{"index.js"},
 						Dir:  filepath.Join(sampleDir(), "mfe"),
+						Env:  map[string]string{"API_BASE": "http://localhost:" + port},
 					}
 				},
 			),
+		},
+		Tests: []tui.TestTemplate{
+			{
+				Label: "API",
+				Build: func(v tui.WizardValues) (tui.TestCommand, error) {
+					port := v.String("api_port")
+					if port == "" {
+						port = "9001"
+					}
+					return tui.TestCommand{
+						Cmd:  "go",
+						Args: []string{"test", "-v", "./..."},
+						Dir:  sampleDir(),
+						Env:  map[string]string{"API_BASE": "http://localhost:" + port},
+					}, nil
+				},
+			},
 		},
 	}
 

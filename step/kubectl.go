@@ -4,18 +4,15 @@ import (
 	"context"
 	"os/exec"
 	"time"
-	"tui/config"
 )
 
 // KubectlStep polls `kubectl get pods` every 5 s and updates its panel with the result.
 // It has no log file — output is sent directly via SetMsg.
 type KubectlStep struct{}
 
-func (s *KubectlStep) ID() string                              { return "kubectl" }
-func (s *KubectlStep) LogPath(_ string) string                 { return "" }
-func (s *KubectlStep) ReadConfig(_ config.InstanceConfig)      {}
-func (s *KubectlStep) WriteConfig(_ *config.InstanceConfig)    {}
-func (s *KubectlStep) Stop(_ context.Context, _ string) error  { return nil }
+func (s *KubectlStep) ID() string                             { return "kubectl" }
+func (s *KubectlStep) LogPath(_ string) string                { return "" }
+func (s *KubectlStep) Stop(_ context.Context, _ string) error { return nil }
 
 // Start begins a background poll loop that runs until ctx is cancelled.
 // It polls immediately, then every 5 s.

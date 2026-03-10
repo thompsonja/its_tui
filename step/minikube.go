@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"tui/config"
 )
 
@@ -45,19 +44,3 @@ func (s *MinikubeStep) Stop(ctx context.Context, _ string) error {
 	return nil
 }
 
-// ReadConfig reads CPU and RAM from cfg.Minikube.
-func (s *MinikubeStep) ReadConfig(cfg config.InstanceConfig) {
-	if cfg.Minikube.CPU > 0 {
-		s.CPU = strconv.Itoa(cfg.Minikube.CPU)
-	}
-	if cfg.Minikube.RAM != "" {
-		s.RAM = cfg.Minikube.RAM
-	}
-}
-
-// WriteConfig writes CPU and RAM back into cfg.Minikube.
-func (s *MinikubeStep) WriteConfig(cfg *config.InstanceConfig) {
-	cpu, _ := strconv.Atoi(s.CPU)
-	cfg.Minikube.CPU = cpu
-	cfg.Minikube.RAM = s.RAM
-}

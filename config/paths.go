@@ -11,14 +11,6 @@ func tuiDir() string {
 	return filepath.Join(home, ".tui")
 }
 
-// DefaultConfigPath returns the first config.yaml found: local then ~/.tui/.
-func DefaultConfigPath() string {
-	if _, err := os.Stat("config.yaml"); err == nil {
-		return "config.yaml"
-	}
-	return filepath.Join(tuiDir(), "config.yaml")
-}
-
 // DefaultStatePath returns ~/.tui/state.json.
 func DefaultStatePath() string {
 	return filepath.Join(tuiDir(), "state.json")

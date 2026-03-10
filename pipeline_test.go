@@ -3,9 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
-
-	"tui/config"
 )
 
 // ── fakeStep ──────────────────────────────────────────────────────────────────
@@ -17,12 +16,9 @@ type fakeStep struct {
 	startErr error
 }
 
-func (f *fakeStep) ID() string                               { return f.id }
-func (f *fakeStep) LogPath(name string) string               { return f.logPath }
+func (f *fakeStep) ID() string                                   { return f.id }
+func (f *fakeStep) LogPath(name string) string                   { return f.logPath }
 func (f *fakeStep) Start(ctx context.Context, name string) error { return f.startErr }
-func (f *fakeStep) Stop(ctx context.Context, name string) error  { return nil }
-func (f *fakeStep) ReadConfig(cfg config.InstanceConfig)         {}
-func (f *fakeStep) WriteConfig(cfg *config.InstanceConfig)       {}
 
 // fakeBuild returns a Build function that always returns a fakeStep with the
 // given ID, or the given error.
@@ -72,7 +68,7 @@ func TestBuildDefsFromTemplates_ErrorIncludesLabel(t *testing.T) {
 		t.Fatal("expected non-empty error")
 	}
 	// Error should mention the template label.
-	if !containsStr(err.Error(), "my-step") {
+	if !strings.Contains(err.Error(), "my-step") {
 		t.Fatalf("error should mention template label, got: %v", err)
 	}
 }
@@ -83,7 +79,7 @@ func TestBuildDefsFromTemplates_UsesLabelFunc(t *testing.T) {
 		LabelFunc: func(v WizardValues) string { return "dynamic-" + v.String("x") },
 		Build:     fakeBuild("s", nil),
 	}}}}
-	vals := WizardValues{str: map[string]string{"x": "42"}, strs: map[string][]string{}}
+	vals := NewWizardValues(map[string]string{"x": "42"}, nil)
 	defs, err := m.buildDefsFromTemplates(vals)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +150,7 @@ func TestBuildDefsFromTemplates_PassesValuesToBuild(t *testing.T) {
 			return &fakeStep{id: "x"}, nil
 		},
 	}}}}
-	vals := WizardValues{str: map[string]string{"cpu": "8"}, strs: map[string][]string{}}
+	vals := NewWizardValues(map[string]string{"cpu": "8"}, nil)
 	m.buildDefsFromTemplates(vals)
 	if received.String("cpu") != "8" {
 		t.Fatalf("expected cpu=8, got %q", received.String("cpu"))
@@ -448,10 +444,7 @@ func TestValidateTemplates_AllValidTemplates(t *testing.T) {
 func TestNewStartWizard_PrePopulatesSelectField(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}
 	// CPU options: "2"(0), "4"(1), "8"(2), "16"(3) — select "8"
-	initial := WizardValues{
-		str:  map[string]string{"cpu": "8"},
-		strs: map[string][]string{},
-	}
+	initial := NewWizardValues(map[string]string{"cpu": "8"}, nil)
 	wiz := newStartWizard(m, initial)
 	cpuState := wiz.states[0] // first field is cpu
 	if cpuState.selectIdx != 2 {
@@ -462,10 +455,7 @@ func TestNewStartWizard_PrePopulatesSelectField(t *testing.T) {
 func TestNewStartWizard_PrePopulatesSelectUnknownValue(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}
 	// Unknown value falls back to Default (index 1 for CPU).
-	initial := WizardValues{
-		str:  map[string]string{"cpu": "999"},
-		strs: map[string][]string{},
-	}
+	initial := NewWizardValues(map[string]string{"cpu": "999"}, nil)
 	wiz := newStartWizard(m, initial)
 	if wiz.states[0].selectIdx != 1 {
 		t.Fatalf("expected default index 1, got %d", wiz.states[0].selectIdx)
@@ -476,10 +466,7 @@ func TestNewStartWizard_PrePopulatesSingleSelect(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{
 		MFETemplate([]string{"checkout-mfe", "user-mfe"}, nil),
 	}}}
-	initial := WizardValues{
-		str:  map[string]string{"mfe": "user-mfe"},
-		strs: map[string][]string{},
-	}
+	initial := NewWizardValues(map[string]string{"mfe": "user-mfe"}, nil)
 	wiz := newStartWizard(m, initial)
 	if wiz.states[0].singleValue != "user-mfe" {
 		t.Fatalf("expected user-mfe, got %q", wiz.states[0].singleValue)
@@ -494,10 +481,10 @@ func TestNewStartWizard_PrePopulatesSystemSelect(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{
 		SkaffoldTemplate(nil, systems),
 	}}}
-	initial := WizardValues{
-		str:  map[string]string{"mode": "debug"},
-		strs: map[string][]string{"components": {"checkout-backend"}},
-	}
+	initial := NewWizardValues(
+		map[string]string{"mode": "debug"},
+		map[string][]string{"components": {"checkout-backend"}},
+	)
 	wiz := newStartWizard(m, initial)
 
 	// Field 0 is "components" (SystemSelect), field 1 is "mode" (Select).
@@ -556,16 +543,3 @@ func TestMFETemplate_NoStopFunc(t *testing.T) {
 	}
 }
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-func containsStr(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		func() bool {
-			for i := 0; i <= len(s)-len(sub); i++ {
-				if s[i:i+len(sub)] == sub {
-					return true
-				}
-			}
-			return false
-		}())
-}

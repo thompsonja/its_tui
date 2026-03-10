@@ -97,9 +97,10 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 // MFETemplate returns a StepTemplate for a micro-frontend runner.
 //
 // mfes is the list of available MFE names shown in the single-select picker.
-// run is called with the selected name; if nil, defaults to "npm start" in the
-// MFE name directory.
-func MFETemplate(mfes []string, run func(name string) MFECommand) StepTemplate {
+// run is called with the selected MFE name and the full wizard values (so port
+// fields or other selections can be read); if nil, defaults to "npm start" in
+// the MFE name directory.
+func MFETemplate(mfes []string, run func(name string, v WizardValues) MFECommand) StepTemplate {
 	return StepTemplate{
 		ID:    "mfe",
 		Panel: PanelBottomRight,
@@ -114,7 +115,7 @@ func MFETemplate(mfes []string, run func(name string) MFECommand) StepTemplate {
 			}
 			var cmd MFECommand
 			if run != nil {
-				cmd = run(mfe)
+				cmd = run(mfe, v)
 			} else {
 				cmd = MFECommand{Cmd: "npm", Args: []string{"start"}, Dir: mfe}
 			}

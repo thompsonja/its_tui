@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"tui/config"
 	"tui/step"
 )
 
@@ -54,17 +56,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerTick++
 		// Update spinner frames for any active (non-pending, non-done) steps.
 		if len(m.steps) > 0 {
-			frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 			changed := false
 			for _, s := range m.steps {
 				if !s.done && !s.pending && s.bufIdx < len(m.commandsBuf) {
-					m.commandsBuf[s.bufIdx] = "  " + frames[m.spinnerTick%len(frames)] + " " + s.label
+					m.commandsBuf[s.bufIdx] = "  " + spinnerFrames[m.spinnerTick%len(spinnerFrames)] + " " + s.label
 					changed = true
 				}
 			}
 			if changed {
 				m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
 			}
+		}
+		// Expire flash notification in the panel title.
+		if m.flashMsg != "" && m.spinnerTick >= m.flashUntil {
+			m.flashMsg = ""
 		}
 		// Advance card-flip animation toward target.
 		if newP, settled := advanceAnim(m.flipProgress, m.flipTarget, flipStep); newP != m.flipProgress {
@@ -120,7 +125,59 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		go func() { _ = SaveMFEPGID(sp, pgid) }()
 
 	case step.DebugPortMsg:
-		m.debugPorts = append(m.debugPorts, msg)
+		if isDebugPortName(msg.PortName) {
+			m.debugPorts = append(m.debugPorts, msg)
+		} else {
+			m.fwdPorts = append(m.fwdPorts, msg)
+		}
+		m.portsVP.SetContent(m.renderPortsContent())
+		m.debugVP.SetContent(m.renderDebugContent())
+		sp := m.statePath
+		fwdPorts := make([]config.DebugPort, len(m.fwdPorts))
+		for i, p := range m.fwdPorts {
+			fwdPorts[i] = config.DebugPort{
+				LocalPort:    p.LocalPort,
+				RemotePort:   p.RemotePort,
+				ResourceName: p.ResourceName,
+				PortName:     p.PortName,
+				Address:      p.Address,
+			}
+		}
+		dbgPorts := make([]config.DebugPort, len(m.debugPorts))
+		for i, p := range m.debugPorts {
+			dbgPorts[i] = config.DebugPort{
+				LocalPort:    p.LocalPort,
+				RemotePort:   p.RemotePort,
+				ResourceName: p.ResourceName,
+				PortName:     p.PortName,
+				Address:      p.Address,
+			}
+		}
+		go func() { _ = config.SavePorts(sp, fwdPorts, dbgPorts) }()
+
+	case copyResultMsg:
+		m.flashMsg = msg.msg
+		m.flashOk = msg.ok
+		m.flashUntil = m.spinnerTick + 180 // ~3 s at 60 fps
+
+	case testLineMsg:
+		m.testBuf = appendLine(m.testBuf, string(msg))
+		if m.isTestsTabActive(PanelBottomRight) {
+			m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
+			m.testVP.GotoBottom()
+		}
+
+	case testDoneMsg:
+		m.testRunning = false
+		status := "  [tests passed]"
+		if !msg.ok {
+			status = "  [tests failed]"
+		}
+		m.testBuf = appendLine(m.testBuf, status)
+		if m.isTestsTabActive(PanelBottomRight) {
+			m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
+			m.testVP.GotoBottom()
+		}
 
 	case stepDoneMsg:
 		m.finishStep(msg.id, msg.ok, msg.label)
@@ -129,9 +186,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if s, ok := m.steps[msg.id]; ok {
 			s.pending = false
 			// Update the line immediately to a spinner frame so it starts animating.
-			frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 			if s.bufIdx < len(m.commandsBuf) {
-				m.commandsBuf[s.bufIdx] = "  " + frames[m.spinnerTick%len(frames)] + " " + s.label
+				m.commandsBuf[s.bufIdx] = "  " + spinnerFrames[m.spinnerTick%len(spinnerFrames)] + " " + s.label
 			}
 			m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
 		}
@@ -156,7 +212,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "ctrl+f":
-			if m.instance.Name != "" {
+			if m.instanceName != "" {
 				if m.fullscreenTarget == 1 {
 					m.fullscreenTarget = 0
 				} else {
@@ -192,7 +248,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
-			if m.instance.Name != "" {
+			if m.instanceName != "" {
 				if m.flipTarget == 1.0 {
 					m.flipTarget = 0.0
 				}
@@ -209,7 +265,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
-			if m.instance.Name != "" {
+			if m.instanceName != "" {
 				if m.flipTarget == 1.0 {
 					m.flipTarget = 0.0
 				}
@@ -247,11 +303,68 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					break
 				}
 				pv := &m.panels[pid]
-				if msg.String() == "t" && len(pv.defs) > 1 {
-					pv.activeIdx = (pv.activeIdx + 1) % len(pv.defs)
-					buf := pv.bufs[pv.activeIdx]
-					m.panelVPs[pid].SetContent(wrapContent(buf, m.panelVPs[pid].Width))
-					m.panelVPs[pid].GotoBottom()
+				totalTabs := len(pv.defs)
+				if pid == PanelTopRight && len(m.fwdPorts) > 0 {
+					totalTabs++ // virtual Ports tab
+				}
+				if pid == PanelTopRight && len(m.debugPorts) > 0 {
+					totalTabs++ // virtual Debug tab
+				}
+				if pid == PanelBottomRight && len(m.cfg.Tests) > 0 {
+					totalTabs++ // virtual Tests tab
+				}
+				if m.searchMode {
+					switch msg.String() {
+					case "esc":
+						m.searchMode = false
+						m.searchQuery = ""
+						m.searchInput.Reset()
+						m.searchInput.Blur()
+					default:
+						var newInput textinput.Model
+						newInput, cmd = m.searchInput.Update(msg)
+						m.searchInput = newInput
+						m.searchQuery = m.searchInput.Value()
+						m.refreshFocusedPanel()
+					}
+				} else if msg.String() == "/" {
+					m.searchMode = true
+					m.searchQuery = ""
+					m.searchInput.Reset()
+					m.searchInput.Focus()
+				} else if msg.String() == "t" && totalTabs > 1 {
+					pv.activeIdx = (pv.activeIdx + 1) % totalTabs
+					if pv.activeIdx < len(pv.defs) {
+						buf := pv.bufs[pv.activeIdx]
+						m.panelVPs[pid].SetContent(wrapContent(buf, m.panelVPs[pid].Width))
+						m.panelVPs[pid].GotoBottom()
+					} else if m.isPortsTabActive(pid) {
+						m.portsVP.SetContent(m.renderPortsContent())
+						m.portsVP.GotoBottom()
+					} else if m.isDebugTabActive(pid) {
+						m.debugVP.SetContent(m.renderDebugContent())
+						m.debugVP.GotoBottom()
+					} else if m.isTestsTabActive(pid) {
+						m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
+						m.testVP.GotoBottom()
+					}
+				} else if m.isDebugTabActive(pid) {
+					if msg.String() == "c" {
+						json := m.launchJSONString()
+						go func() {
+							if err := copyToClipboard(json); err != nil {
+								prog.Send(copyResultMsg{ok: false, msg: err.Error()})
+							} else {
+								prog.Send(copyResultMsg{ok: true, msg: "copied to clipboard"})
+							}
+						}()
+					} else {
+						m.debugVP, cmd = m.debugVP.Update(msg)
+					}
+				} else if m.isPortsTabActive(pid) {
+					m.portsVP, cmd = m.portsVP.Update(msg)
+				} else if m.isTestsTabActive(pid) {
+					m.testVP, cmd = m.testVP.Update(msg)
 				} else {
 					m.panelVPs[pid], cmd = m.panelVPs[pid].Update(msg)
 				}
@@ -333,6 +446,9 @@ func (m *model) resizePanels() {
 		m.commandsVP.SetContent(wrapContent(m.commandsBuf, vpW_L))
 		m.commandsVP.GotoBottom()
 		m.helpOverlayVP = viewport.New(vpW_L, vpH_overlay)
+		m.portsVP = viewport.New(vpW_R, vpH_top)
+		m.debugVP = viewport.New(vpW_R, vpH_top)
+		m.testVP = viewport.New(vpW_R, vpH_mfe)
 	} else {
 		for _, s := range contentSpecs {
 			pv := &m.panels[s.pid]
@@ -348,7 +464,16 @@ func (m *model) resizePanels() {
 		m.commandsVP.GotoBottom()
 		m.helpOverlayVP.Width = vpW_L
 		m.helpOverlayVP.Height = vpH_overlay
+		m.portsVP.Width = vpW_R
+		m.portsVP.Height = vpH_top
+		m.debugVP.Width = vpW_R
+		m.debugVP.Height = vpH_top
+		m.testVP.Width = vpW_R
+		m.testVP.Height = vpH_mfe
 	}
+	m.portsVP.SetContent(m.renderPortsContent())
+	m.debugVP.SetContent(m.renderDebugContent())
+	m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
 	m.helpOverlayVP.SetContent(helpContent(vpW_L))
 	m.input.Width = vpW_L
 

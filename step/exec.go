@@ -27,8 +27,12 @@ func StreamToPanel(ctx context.Context, id string, name string, args ...string) 
 	})
 }
 
-// streamCmd drains stdout and stderr from cmd, calling emit for each line.
+// StreamCmd drains stdout and stderr from cmd, calling emit for each line.
 // Suppresses the exit message when the context was cancelled.
+func StreamCmd(ctx context.Context, cmd *exec.Cmd, emit func(string)) {
+	streamCmd(ctx, cmd, emit)
+}
+
 func streamCmd(ctx context.Context, cmd *exec.Cmd, emit func(string)) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"os/exec"
 	"strings"
-	"tui/config"
 )
 
 // Send is the package-level sender registered by SetSender.
@@ -16,9 +15,10 @@ func SetSender(fn func(any)) { Send = fn }
 
 // MFECommand describes how to run a micro-frontend.
 type MFECommand struct {
-	Cmd  string   // executable name
-	Args []string // arguments
-	Dir  string   // working directory
+	Cmd  string            // executable name
+	Args []string          // arguments
+	Dir  string            // working directory
+	Env  map[string]string // extra environment variables (merged with os.Environ)
 }
 
 // Step describes a managed process within an instance.
@@ -33,15 +33,6 @@ type Step interface {
 	// Start launches the step and blocks until it is running/ready or fails.
 	// ctx is cancelled when the instance is stopped or switched.
 	Start(ctx context.Context, instanceName string) error
-
-	// Stop gracefully shuts the step down.
-	Stop(ctx context.Context, instanceName string) error
-
-	// ReadConfig reads the step's settings from cfg.
-	ReadConfig(cfg config.InstanceConfig)
-
-	// WriteConfig writes the step's current settings into cfg.
-	WriteConfig(cfg *config.InstanceConfig)
 }
 
 // WatchStep tails the step's log file and forwards each line via Send.

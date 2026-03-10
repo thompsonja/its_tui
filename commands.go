@@ -4,9 +4,33 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"tui/step"
 )
+
+// copyToClipboard writes text to the system clipboard by piping to the first
+// available clipboard tool: wl-copy (Wayland), xclip, xsel (X11), pbcopy (macOS).
+func copyToClipboard(text string) error {
+	tools := [][]string{
+		{"wl-copy"},
+		{"xclip", "-selection", "clipboard"},
+		{"xsel", "--clipboard", "--input"},
+		{"pbcopy"},
+	}
+	for _, args := range tools {
+		path, err := exec.LookPath(args[0])
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, args[1:]...)
+		cmd.Stdin = strings.NewReader(text)
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+	}
+	return fmt.Errorf("no clipboard tool found (install xclip, xsel, or wl-clipboard)")
+}
 
 // debugRuntime returns a human-readable runtime name for a skaffold portName.
 func debugRuntime(portName string) string {
@@ -86,13 +110,26 @@ func vscodeLaunchConfig(p step.DebugPortMsg, addr string) []string {
 	}
 }
 
+// wizardValuesFromState reconstructs a WizardValues from a saved InstanceState.
+func wizardValuesFromState(inst *InstanceState) WizardValues {
+	str := inst.StringValues
+	strs := inst.SliceValues
+	if str == nil {
+		str = map[string]string{}
+	}
+	if strs == nil {
+		strs = map[string][]string{}
+	}
+	return WizardValues{str: str, strs: strs}
+}
+
 // switchToInstance cancels the current instance context, clears panel content,
 // and sets the new instance name. Callers are responsible for calling
 // registerPipeline and starting watchers / executeStart as needed.
 func (m *model) switchToInstance(name string) {
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
-	m.instance.Name = name
+	m.instanceName = name
 	m.debugPorts = nil
 	// Clear panel buffers (defs are reset by a subsequent registerPipeline call).
 	for i := range m.panels {
@@ -109,15 +146,7 @@ func (m *model) switchToInstance(name string) {
 // buildPipelineFromState reconstructs the step graph from a saved InstanceState,
 // used when restoring a previously-running instance after a restart.
 func (m *model) buildPipelineFromState(instanceName string, inst *InstanceState) []StepDef {
-	str := inst.StringValues
-	strs := inst.SliceValues
-	if str == nil {
-		str = map[string]string{}
-	}
-	if strs == nil {
-		strs = map[string][]string{}
-	}
-	values := WizardValues{str: str, strs: strs}
+	values := wizardValuesFromState(inst)
 	defs, _ := m.buildDefsFromTemplates(values)
 	return defs
 }
@@ -179,31 +208,23 @@ func (m *model) dispatchCommand(line string) {
 		// Pre-populate the wizard from the last saved session, if any.
 		var initial WizardValues
 		if state, err := LoadState(sp); err == nil && state.Instance != nil {
-			str := state.Instance.StringValues
-			strs := state.Instance.SliceValues
-			if str == nil {
-				str = map[string]string{}
-			}
-			if strs == nil {
-				strs = map[string][]string{}
-			}
-			initial = WizardValues{str: str, strs: strs}
+			initial = wizardValuesFromState(state.Instance)
 		}
 		m.overlay = overlayWizard
 		m.wizard = newStartWizard(m, initial)
 		m.flipTarget = 1.0
 
 	case "stop":
-		name := m.instance.Name
+		name := m.instanceName
 		m.printLine("$ stop")
 		if name == "" {
-			m.printLine("  no active instance")
+			m.printLine("  no active instance — run: start")
 			break
 		}
 		m.steps = map[string]*commandStep{}
 		cancelInstance()
 		instanceCtx, cancelInstance = context.WithCancel(context.Background())
-		m.instance.Name = ""
+		m.instanceName = ""
 		// Clear panel bufs (keep defs so stop output routes correctly).
 		for i := range m.panels {
 			for j := range m.panels[i].bufs {
@@ -211,6 +232,12 @@ func (m *model) dispatchCommand(line string) {
 			}
 			m.panels[i].activeIdx = 0
 		}
+		cancelTest()
+		m.testBuf = nil
+		m.testRunning = false
+		m.testVP.SetContent("")
+		m.debugPorts = nil
+		m.fwdPorts = nil
 		for i := range m.panelVPs {
 			m.panelVPs[i].SetContent("")
 		}
@@ -261,12 +288,61 @@ func (m *model) dispatchCommand(line string) {
 			prog.Send(instanceStoppedMsg{})
 		}()
 
+	case "restart":
+		m.printLine("$ " + strings.Join(parts, " "))
+		if m.instanceName == "" {
+			m.printLine("  no active instance — run: start")
+			break
+		}
+		if len(parts) < 2 {
+			m.printLine("  usage: restart <step-id>")
+			break
+		}
+		id := parts[1]
+		def, ok := m.findDef(id)
+		if !ok {
+			m.printLine("  unknown step: " + id)
+			break
+		}
+		name := m.instanceName
+		// Cancel the existing step context.
+		if e, exists := m.stepCtxs[id]; exists {
+			e.cancel()
+		}
+		// Clear the panel buffer for this step.
+		if pid, idx := m.panelAndIdx(id); idx >= 0 {
+			m.panels[pid].bufs[idx] = nil
+			if m.panels[pid].activeIdx == idx {
+				m.panelVPs[pid].SetContent("")
+			}
+		}
+		// Create a new per-step context.
+		stepCtx, stepCancel := context.WithCancel(instanceCtx)
+		if m.stepCtxs == nil {
+			m.stepCtxs = make(map[string]stepEntry)
+		}
+		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+		// Truncate log file if any.
+		if lp := def.Step.LogPath(name); lp != "" {
+			_ = os.Truncate(lp, 0)
+			go watchStep(stepCtx, def, name)
+		}
+		// Re-register spinner and start the step.
+		m.startStep(id, def.effectiveLabel())
+		go func() {
+			if err := def.Step.Start(stepCtx, name); err != nil {
+				prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
+				return
+			}
+			prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
+		}()
+
 	case "logs":
 		m.printLine("$ logs")
-		if m.instance.Name == "" {
-			m.printLine("  no active instance")
+		if m.instanceName == "" {
+			m.printLine("  no active instance — run: start")
 		} else {
-			name := m.instance.Name
+			name := m.instanceName
 			for _, pv := range m.panels {
 				for _, def := range pv.defs {
 					lp := def.Step.LogPath(name)
@@ -277,45 +353,93 @@ func (m *model) dispatchCommand(line string) {
 			}
 		}
 
-	case "ports":
-		m.printLine("$ ports")
-		if m.instance.Name == "" {
-			m.printLine("  no active instance")
+	case "test":
+		m.printLine("$ test")
+		if m.instanceName == "" {
+			m.printLine("  no active instance — run: start")
 			break
 		}
-		if len(m.debugPorts) == 0 {
-			m.printLine("  no debug ports (is skaffold running in debug mode?)")
+		if len(m.cfg.Tests) == 0 {
+			m.printLine("  no tests configured")
 			break
 		}
-		m.printLine("  Debug ports:")
-		for _, p := range m.debugPorts {
-			addr := p.Address
-			if addr == "" {
-				addr = "127.0.0.1"
-			}
-			m.printLine(fmt.Sprintf("    %-24s %s:%d  (%s)", p.ResourceName, addr, p.LocalPort, debugRuntime(p.PortName)))
+		if m.testRunning {
+			m.printLine("  test already running")
+			break
 		}
-		m.printLine("")
-		m.printLine("  VSCode launch.json:")
-		m.printLine(`    {`)
-		m.printLine(`      "version": "0.2.0",`)
-		m.printLine(`      "configurations": [`)
-		for i, p := range m.debugPorts {
-			addr := p.Address
-			if addr == "" {
-				addr = "127.0.0.1"
+		// Resolve which test template to run.
+		var tmpl *TestTemplate
+		if len(parts) > 1 {
+			label := strings.Join(parts[1:], " ")
+			for i := range m.cfg.Tests {
+				if m.cfg.Tests[i].Label == label {
+					tmpl = &m.cfg.Tests[i]
+					break
+				}
 			}
-			comma := ","
-			if i == len(m.debugPorts)-1 {
-				comma = ""
+			if tmpl == nil {
+				m.printLine("  unknown test: " + label)
+				m.printLine("  available:")
+				for _, t := range m.cfg.Tests {
+					m.printLine("    " + t.Label)
+				}
+				break
 			}
-			for _, line := range vscodeLaunchConfig(p, addr) {
-				m.printLine("        " + line)
+		} else if len(m.cfg.Tests) == 1 {
+			tmpl = &m.cfg.Tests[0]
+		} else {
+			m.printLine("  multiple test suites configured — use: test <label>")
+			for _, t := range m.cfg.Tests {
+				m.printLine("    " + t.Label)
 			}
-			m.printLine("      }" + comma)
+			break
 		}
-		m.printLine(`      ]`)
-		m.printLine(`    }`)
+		// Build wizard values from saved state (same selections used at start).
+		var values WizardValues
+		if state, err := LoadState(sp); err == nil && state.Instance != nil {
+			values = wizardValuesFromState(state.Instance)
+		}
+		tc, err := tmpl.Build(values)
+		if err != nil {
+			m.printLine("  error building test command: " + err.Error())
+			break
+		}
+		if tc.Cmd == "" {
+			m.printLine("  test template returned empty command")
+			break
+		}
+		// Switch BottomRight to the Tests tab and clear previous output.
+		m.testBuf = nil
+		m.testVP.SetContent("")
+		m.panels[PanelBottomRight].activeIdx = len(m.panels[PanelBottomRight].defs)
+		m.testRunning = true
+		cancelTest()
+		var testCtx context.Context
+		testCtx, cancelTest = context.WithCancel(instanceCtx)
+		label := tmpl.Label
+		go func() {
+			cmd := exec.Command(tc.Cmd, tc.Args...)
+			cmd.Dir = tc.Dir
+			if len(tc.Env) > 0 {
+				cmd.Env = os.Environ()
+				for k, v := range tc.Env {
+					cmd.Env = append(cmd.Env, k+"="+v)
+				}
+			}
+			ok := true
+			step.StreamCmd(testCtx, cmd, func(line string) {
+				if strings.HasPrefix(line, "[exited:") {
+					ok = false
+				}
+				prog.Send(testLineMsg(line))
+			})
+			if testCtx.Err() != nil {
+				prog.Send(testLineMsg("  [" + label + " cancelled]"))
+				prog.Send(testDoneMsg{ok: false})
+				return
+			}
+			prog.Send(testDoneMsg{ok: ok})
+		}()
 
 	case "theme":
 		m.printLine("$ " + line)
@@ -348,7 +472,7 @@ func (m *model) dispatchCommand(line string) {
 func (m *model) executeStartFromWizard() {
 	wiz := m.wizard
 	sp := m.statePath
-	name := m.instanceName()
+	name := m.configuredName()
 
 	m.printLine("$ start")
 	values := wiz.buildValues()
@@ -369,28 +493,40 @@ func (m *model) executeStartFromWizard() {
 	m.switchToInstance(name)
 	m.registerPipeline(defs)
 	m.fullscreenTarget = 0
-	ctx := instanceCtx
+
+	// Truncate log files before executeStart (which creates per-step contexts).
 	for _, def := range defs {
-		// Truncate any existing log file before starting the watcher so that
-		// tail -F doesn't replay old content before Start creates a fresh one.
 		if lp := def.Step.LogPath(name); lp != "" {
 			_ = os.Truncate(lp, 0)
 		}
-		go watchStep(ctx, def, name)
 	}
+
+	// executeStart creates per-step contexts in m.stepCtxs.
 	m.executeStart(defs)
+
+	// Start watchers using the per-step contexts created by executeStart.
+	for _, def := range defs {
+		id := def.Step.ID()
+		if e, ok := m.stepCtxs[id]; ok {
+			go watchStep(e.ctx, def, name)
+		}
+	}
 }
 
 // executeStart launches all step processes with dependency ordering.
 // Steps with WaitFor set block until their dependency signals ready.
 func (m *model) executeStart(defs []StepDef) {
 	m.steps = map[string]*commandStep{}
-	name := m.instance.Name
+	m.stepCtxs = make(map[string]stepEntry)
+	name := m.instanceName
 
-	// Build a ready channel for each step.
+	// Create per-step contexts and build a ready channel for each step.
 	ready := make(map[string]chan struct{}, len(defs))
 	for _, def := range defs {
-		ready[def.Step.ID()] = make(chan struct{})
+		id := def.Step.ID()
+		ready[id] = make(chan struct{})
+		stepCtx, stepCancel := context.WithCancel(instanceCtx)
+		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
 	// Register visible steps in the commands panel tracker.
@@ -406,28 +542,29 @@ func (m *model) executeStart(defs []StepDef) {
 		}
 	}
 
-	ctx := instanceCtx
 	for _, def := range defs {
 		def := def
+		id := def.Step.ID()
+		stepCtx := m.stepCtxs[id].ctx
 		go func() {
 			// Wait for dependency if any.
 			if def.WaitFor != "" {
 				if ch, ok := ready[def.WaitFor]; ok {
 					select {
 					case <-ch:
-					case <-ctx.Done():
+					case <-instanceCtx.Done():
 						return
 					}
 				}
 				// Activate this step (triggers spinner + AutoActivate if set).
-				prog.Send(stepActivateMsg{id: def.Step.ID()})
+				prog.Send(stepActivateMsg{id: id})
 			}
 
 			// Start the step.
-			if err := def.Step.Start(ctx, name); err != nil {
+			if err := def.Step.Start(stepCtx, name); err != nil {
 				if !def.Hidden {
 					prog.Send(stepDoneMsg{
-						id:    def.Step.ID(),
+						id:    id,
 						ok:    false,
 						label: def.effectiveLabel() + " failed: " + err.Error(),
 					})
@@ -436,7 +573,7 @@ func (m *model) executeStart(defs []StepDef) {
 			}
 
 			// Signal ready to unblock any dependents.
-			close(ready[def.Step.ID()])
+			close(ready[id])
 
 			// Invoke the OnReady callback.
 			if def.OnReady != nil {
@@ -445,7 +582,7 @@ func (m *model) executeStart(defs []StepDef) {
 
 			if !def.Hidden {
 				prog.Send(stepDoneMsg{
-					id:    def.Step.ID(),
+					id:    id,
 					ok:    true,
 					label: def.effectiveLabel() + " running",
 				})
