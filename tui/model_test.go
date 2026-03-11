@@ -144,7 +144,7 @@ func newTestSysField() *fieldState {
 		}},
 	}
 	spec := FieldSpec{ID: "components", Kind: FieldKindSystemSelect, Systems: systems}
-	s := &fieldState{spec: spec, pickerSearch: si}
+	s := &fieldState{spec: spec, pickerSearch: si, resolvedSystems: systems}
 	// Initialise full items list (mirrors newStartWizard logic).
 	for _, sys := range systems {
 		s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})

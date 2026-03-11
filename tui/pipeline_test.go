@@ -511,6 +511,178 @@ func TestNewStartWizard_EmptyInitialLeavesDefaults(t *testing.T) {
 	}
 }
 
+// ── Dynamic field options (OptionsFunc / SystemsFunc) ─────────────────────────
+
+func TestNewStartWizard_SystemsFunc_OverridesStaticSystems(t *testing.T) {
+	dynamic := []System{{
+		Name:       "dynamic-sys",
+		Components: []Component{{Name: "dyn-comp-a"}, {Name: "dyn-comp-b"}},
+	}}
+	m := &model{cfg: Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "components",
+			Label:       "Components",
+			Kind:        FieldKindSystemSelect,
+			Systems:     []System{{Name: "static-sys", Components: []Component{{Name: "static-comp"}}}},
+			SystemsFunc: func() []System { return dynamic },
+		}},
+	}}}}
+	wiz := newStartWizard(m, WizardValues{})
+	items := wiz.states[0].sysPickerItems
+	if len(items) != 3 { // 1 header + 2 components
+		t.Fatalf("expected 3 picker items, got %d: %v", len(items), items)
+	}
+	if items[0].system != "dynamic-sys" {
+		t.Fatalf("expected dynamic-sys header, got %q", items[0].system)
+	}
+}
+
+func TestNewStartWizard_SystemsFunc_NilFallsBackToStatic(t *testing.T) {
+	static := []System{{
+		Name:       "static-sys",
+		Components: []Component{{Name: "static-comp"}},
+	}}
+	m := &model{cfg: Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:      "components",
+			Label:   "Components",
+			Kind:    FieldKindSystemSelect,
+			Systems: static,
+			// SystemsFunc is nil
+		}},
+	}}}}
+	wiz := newStartWizard(m, WizardValues{})
+	items := wiz.states[0].sysPickerItems
+	if len(items) != 2 { // 1 header + 1 component
+		t.Fatalf("expected 2 picker items, got %d: %v", len(items), items)
+	}
+	if items[0].system != "static-sys" {
+		t.Fatalf("expected static-sys header, got %q", items[0].system)
+	}
+}
+
+func TestNewStartWizard_OptionsFunc_OverridesStaticOptions(t *testing.T) {
+	m := &model{cfg: Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "ns",
+			Label:       "Namespace",
+			Kind:        FieldKindSingleSelect,
+			Options:     []string{"old-a", "old-b"},
+			OptionsFunc: func() []string { return []string{"new-x", "new-y", "new-z"} },
+		}},
+	}}}}
+	wiz := newStartWizard(m, WizardValues{})
+	items := wiz.states[0].strPickerItems
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d: %v", len(items), items)
+	}
+	if items[0] != "new-x" {
+		t.Fatalf("expected new-x, got %q", items[0])
+	}
+}
+
+func TestNewStartWizard_OptionsFunc_NilFallsBackToStatic(t *testing.T) {
+	m := &model{cfg: Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:      "ns",
+			Label:   "Namespace",
+			Kind:    FieldKindMultiSelect,
+			Options: []string{"alpha", "beta"},
+			// OptionsFunc is nil
+		}},
+	}}}}
+	wiz := newStartWizard(m, WizardValues{})
+	items := wiz.states[0].strPickerItems
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d: %v", len(items), items)
+	}
+	if items[0] != "alpha" {
+		t.Fatalf("expected alpha, got %q", items[0])
+	}
+}
+
+// ── validateTemplates: OptionsFunc / SystemsFunc conflicts ────────────────────
+
+func TestValidateTemplates_BothOptionsAndOptionsFunc_Error(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		ID:    "x",
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "ns",
+			Kind:        FieldKindSingleSelect,
+			Options:     []string{"a", "b"},
+			OptionsFunc: func() []string { return []string{"c"} },
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected error when both Options and OptionsFunc are set")
+	}
+	if !strings.Contains(err.Error(), "ns") {
+		t.Fatalf("error should mention field ID %q, got: %v", "ns", err)
+	}
+}
+
+func TestValidateTemplates_BothSystemsAndSystemsFunc_Error(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		ID:    "x",
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "components",
+			Kind:        FieldKindSystemSelect,
+			Systems:     []System{{Name: "s", Components: []Component{{Name: "c"}}}},
+			SystemsFunc: func() []System { return nil },
+		}},
+	}})
+	if err == nil {
+		t.Fatal("expected error when both Systems and SystemsFunc are set")
+	}
+	if !strings.Contains(err.Error(), "components") {
+		t.Fatalf("error should mention field ID %q, got: %v", "components", err)
+	}
+}
+
+func TestValidateTemplates_OnlyOptionsFunc_Valid(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		ID:    "x",
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "ns",
+			Kind:        FieldKindSingleSelect,
+			OptionsFunc: func() []string { return []string{"a"} },
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("OptionsFunc alone should be valid: %v", err)
+	}
+}
+
+func TestValidateTemplates_OnlySystemsFunc_Valid(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		ID:    "x",
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "components",
+			Kind:        FieldKindSystemSelect,
+			SystemsFunc: func() []System { return nil },
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("SystemsFunc alone should be valid: %v", err)
+	}
+}
+
 // ── StopFunc ──────────────────────────────────────────────────────────────────
 
 func TestMinikubeTemplate_HasStopFunc(t *testing.T) {

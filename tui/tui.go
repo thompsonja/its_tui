@@ -112,8 +112,10 @@ type FieldSpec struct {
 	ID      string    // unique identifier; used as key in WizardValues
 	Label   string    // display label
 	Kind    FieldKind
-	Options []string // choices for Select / SingleSelect / MultiSelect
-	Systems []System // hierarchy for SystemSelect
+	Options     []string       // choices for Select / SingleSelect / MultiSelect
+	OptionsFunc func() []string // called at wizard-open; overrides Options if non-nil
+	Systems     []System       // hierarchy for SystemSelect
+	SystemsFunc func() []System // called at wizard-open; overrides Systems if non-nil
 	Default int      // for Select: index of the default option
 }
 
@@ -253,6 +255,14 @@ var cancelTest context.CancelFunc = func() {}
 func validateTemplates(steps []StepTemplate) error {
 	knownIDs := make(map[string]bool, len(steps))
 	for _, t := range steps {
+		for _, f := range t.Fields {
+			if len(f.Options) > 0 && f.OptionsFunc != nil {
+				return fmt.Errorf("field %q has both Options and OptionsFunc set; use one or the other", f.ID)
+			}
+			if len(f.Systems) > 0 && f.SystemsFunc != nil {
+				return fmt.Errorf("field %q has both Systems and SystemsFunc set; use one or the other", f.ID)
+			}
+		}
 		if t.Build == nil {
 			label := t.Label
 			if label == "" {

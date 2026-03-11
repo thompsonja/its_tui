@@ -34,6 +34,12 @@ type fieldState struct {
 	pickerIdx      int
 	sysPickerItems []pickerItem // FieldKindSystemSelect filtered view
 	strPickerItems []string     // FieldKindSingleSelect / FieldKindMultiSelect filtered view
+
+	// resolvedSystems / resolvedOptions hold the full (unfiltered) item list
+	// as resolved at wizard-open time (from SystemsFunc/OptionsFunc or the
+	// static slice). Filter functions use these instead of re-reading the spec.
+	resolvedSystems []System
+	resolvedOptions []string
 }
 
 // startWizard drives the instance-start configuration screen.
@@ -92,7 +98,7 @@ func (w *startWizard) activeState() *fieldState {
 func (s *fieldState) updateSysFilter() {
 	q := strings.ToLower(s.pickerSearch.Value())
 	s.sysPickerItems = s.sysPickerItems[:0]
-	for _, sys := range s.spec.Systems {
+	for _, sys := range s.resolvedSystems {
 		sysMatches := q == "" || strings.Contains(strings.ToLower(sys.Name), q)
 		var matched []Component
 		for _, c := range sys.Components {
@@ -119,7 +125,7 @@ func (s *fieldState) updateSysFilter() {
 func (s *fieldState) updateStrFilter() {
 	q := strings.ToLower(s.pickerSearch.Value())
 	s.strPickerItems = s.strPickerItems[:0]
-	for _, opt := range s.spec.Options {
+	for _, opt := range s.resolvedOptions {
 		if q == "" || strings.Contains(strings.ToLower(opt), q) {
 			s.strPickerItems = append(s.strPickerItems, opt)
 		}
@@ -234,7 +240,12 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			search.Placeholder = "search systems or components…"
 			search.Width = inputW
 			s.pickerSearch = search
-			for _, sys := range spec.Systems {
+			systems := spec.Systems
+			if spec.SystemsFunc != nil {
+				systems = spec.SystemsFunc()
+			}
+			s.resolvedSystems = systems
+			for _, sys := range systems {
 				s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
 				for _, c := range sys.Components {
 					s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
@@ -245,7 +256,12 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			search.Placeholder = "search…"
 			search.Width = inputW
 			s.pickerSearch = search
-			s.strPickerItems = append([]string(nil), spec.Options...)
+			opts := spec.Options
+			if spec.OptionsFunc != nil {
+				opts = spec.OptionsFunc()
+			}
+			s.resolvedOptions = opts
+			s.strPickerItems = append([]string(nil), opts...)
 		case FieldKindText:
 			ti := textinput.New()
 			ti.Placeholder = "…"
