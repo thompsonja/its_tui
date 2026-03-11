@@ -109,14 +109,14 @@ const (
 
 // FieldSpec describes one user-configurable wizard field.
 type FieldSpec struct {
-	ID      string    // unique identifier; used as key in WizardValues
-	Label   string    // display label
-	Kind    FieldKind
-	Options     []string       // choices for Select / SingleSelect / MultiSelect
-	OptionsFunc func() []string // called at wizard-open; overrides Options if non-nil
-	Systems     []System       // hierarchy for SystemSelect
-	SystemsFunc func() []System // called at wizard-open; overrides Systems if non-nil
-	Default int      // for Select: index of the default option
+	ID          string // unique identifier; used as key in WizardValues
+	Label       string // display label
+	Kind        FieldKind
+	Options     []string                    // choices for Select / SingleSelect / MultiSelect
+	OptionsFunc func(WizardValues) []string // called at wizard-open and on field change; overrides Options if non-nil
+	Systems     []System                    // hierarchy for SystemSelect
+	SystemsFunc func(WizardValues) []System // called at wizard-open and on field change; overrides Systems if non-nil
+	Default     int                         // for Select: index of the default option
 }
 
 // WizardValues holds the collected user selections from the wizard.

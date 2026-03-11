@@ -242,7 +242,7 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			s.pickerSearch = search
 			systems := spec.Systems
 			if spec.SystemsFunc != nil {
-				systems = spec.SystemsFunc()
+				systems = spec.SystemsFunc(initial)
 			}
 			s.resolvedSystems = systems
 			for _, sys := range systems {
@@ -258,7 +258,7 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 			s.pickerSearch = search
 			opts := spec.Options
 			if spec.OptionsFunc != nil {
-				opts = spec.OptionsFunc()
+				opts = spec.OptionsFunc(initial)
 			}
 			s.resolvedOptions = opts
 			s.strPickerItems = append([]string(nil), opts...)
@@ -277,6 +277,84 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 	return &startWizard{
 		fields: fields,
 		states: states,
+	}
+}
+
+// reEvalDynamicFields re-calls all OptionsFunc/SystemsFunc with the current
+// wizard values and updates picker state. Called after every field change so
+// that one field's selection can drive the options shown in another field.
+func (w *startWizard) reEvalDynamicFields() {
+	vals := w.buildValues()
+	for i := range w.states {
+		s := &w.states[i]
+		switch s.spec.Kind {
+		case FieldKindSystemSelect:
+			if s.spec.SystemsFunc == nil {
+				continue
+			}
+			newSystems := s.spec.SystemsFunc(vals)
+			s.resolvedSystems = newSystems
+			// Drop multiValues no longer present in new systems.
+			valid := map[string]bool{}
+			for _, sys := range newSystems {
+				for _, c := range sys.Components {
+					valid[c.Name] = true
+				}
+			}
+			filtered := s.multiValues[:0]
+			for _, v := range s.multiValues {
+				if valid[v] {
+					filtered = append(filtered, v)
+				}
+			}
+			s.multiValues = filtered
+			// Rebuild picker items and re-apply current search filter.
+			s.sysPickerItems = s.sysPickerItems[:0]
+			for _, sys := range newSystems {
+				s.sysPickerItems = append(s.sysPickerItems,
+					pickerItem{isSystem: true, system: sys.Name})
+				for _, c := range sys.Components {
+					s.sysPickerItems = append(s.sysPickerItems,
+						pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+				}
+			}
+			s.updateSysFilter()
+
+		case FieldKindSingleSelect, FieldKindMultiSelect:
+			if s.spec.OptionsFunc == nil {
+				continue
+			}
+			newOpts := s.spec.OptionsFunc(vals)
+			s.resolvedOptions = newOpts
+			if s.spec.Kind == FieldKindSingleSelect {
+				// Clear selection if it no longer exists.
+				found := false
+				for _, o := range newOpts {
+					if o == s.singleValue {
+						found = true
+						break
+					}
+				}
+				if !found {
+					s.singleValue = ""
+				}
+			}
+			if s.spec.Kind == FieldKindMultiSelect {
+				valid := map[string]bool{}
+				for _, o := range newOpts {
+					valid[o] = true
+				}
+				filtered := s.multiValues[:0]
+				for _, v := range s.multiValues {
+					if valid[v] {
+						filtered = append(filtered, v)
+					}
+				}
+				s.multiValues = filtered
+			}
+			s.strPickerItems = append([]string(nil), newOpts...)
+			s.updateStrFilter()
+		}
 	}
 }
 

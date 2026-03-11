@@ -3,10 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
+	"github.com/thompsonja/its_tui/step"
 	"os"
 	"os/exec"
 	"strings"
-	"github.com/thompsonja/its_tui/step"
 )
 
 // copyToClipboard writes text to the system clipboard by piping to the first

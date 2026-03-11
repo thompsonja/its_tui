@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/thompsonja/its_tui/step"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // Panel indices — order determines Tab cycle direction.
@@ -53,9 +53,9 @@ type model struct {
 	ready         bool
 	focused       int
 
-	cfg          Config  // library configuration provided by the caller
-	instanceName string  // name of the currently running instance; "" when stopped
-	statePath    string  // path to state.json
+	cfg          Config // library configuration provided by the caller
+	instanceName string // name of the currently running instance; "" when stopped
+	statePath    string // path to state.json
 
 	// Content panels: index by PanelID (0=TopLeft, 1=TopRight, 2=BottomRight).
 	panels   [3]panelView

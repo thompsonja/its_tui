@@ -20,12 +20,12 @@ type State struct {
 // StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
 // the MFE process starts. Instance is nil when nothing is running.
 type InstanceState struct {
-	StartedAt       string              `json:"started_at,omitempty"`
-	MFEPGID         int                 `json:"mfe_pgid,omitempty"`
-	StringValues    map[string]string   `json:"string_values,omitempty"`
-	SliceValues     map[string][]string `json:"slice_values,omitempty"`
-	DebugPorts      []DebugPort         `json:"debug_ports,omitempty"`
-	ForwardedPorts  []DebugPort         `json:"forwarded_ports,omitempty"`
+	StartedAt      string              `json:"started_at,omitempty"`
+	MFEPGID        int                 `json:"mfe_pgid,omitempty"`
+	StringValues   map[string]string   `json:"string_values,omitempty"`
+	SliceValues    map[string][]string `json:"slice_values,omitempty"`
+	DebugPorts     []DebugPort         `json:"debug_ports,omitempty"`
+	ForwardedPorts []DebugPort         `json:"forwarded_ports,omitempty"`
 }
 
 // DebugPort records one forwarded debug port from skaffold debug.

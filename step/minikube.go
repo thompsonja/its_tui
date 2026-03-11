@@ -3,9 +3,9 @@ package step
 import (
 	"context"
 	"fmt"
+	"github.com/thompsonja/its_tui/config"
 	"os"
 	"os/exec"
-	"github.com/thompsonja/its_tui/config"
 )
 
 // MinikubeStep manages a minikube cluster: start and teardown via `minikube delete`.
@@ -14,7 +14,7 @@ type MinikubeStep struct {
 	RAM string
 }
 
-func (s *MinikubeStep) ID() string             { return "minikube" }
+func (s *MinikubeStep) ID() string                 { return "minikube" }
 func (s *MinikubeStep) LogPath(name string) string { return config.MinikubeLogPath(name) }
 
 // Start runs `minikube start` and blocks until the process exits.
@@ -43,4 +43,3 @@ func (s *MinikubeStep) Stop(ctx context.Context, _ string) error {
 	StreamToPanel(ctx, s.ID(), "minikube", "delete")
 	return nil
 }
-

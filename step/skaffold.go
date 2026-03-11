@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/thompsonja/its_tui/config"
 	"net/http"
 	"os"
 	"os/exec"
@@ -13,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"github.com/thompsonja/its_tui/config"
 )
 
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
@@ -24,7 +24,7 @@ type SkaffoldStep struct {
 	Profiles []string // optional skaffold profiles to activate (--profile flags)
 }
 
-func (s *SkaffoldStep) ID() string                { return "skaffold" }
+func (s *SkaffoldStep) ID() string                 { return "skaffold" }
 func (s *SkaffoldStep) LogPath(name string) string { return config.SkaffoldLogPath(name) }
 
 // Start launches skaffold and blocks until it signals readiness:
@@ -113,8 +113,8 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	go func() {
 		defer lf.Close()
 		err := cmd.Wait()
-		exitErr <- err   // fill before cancelling the watcher
-		cancelWatch()    // unblock waitForSkaffoldDeploy
+		exitErr <- err // fill before cancelling the watcher
+		cancelWatch()  // unblock waitForSkaffoldDeploy
 		if ctx.Err() != nil {
 			return // instance was stopped — suppress noise
 		}

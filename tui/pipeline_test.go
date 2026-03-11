@@ -11,8 +11,8 @@ import (
 
 // fakeStep is a test double for the Step interface.
 type fakeStep struct {
-	id      string
-	logPath string
+	id       string
+	logPath  string
 	startErr error
 }
 
@@ -475,7 +475,7 @@ func TestNewStartWizard_PrePopulatesSingleSelect(t *testing.T) {
 
 func TestNewStartWizard_PrePopulatesSystemSelect(t *testing.T) {
 	systems := []System{{
-		Name: "checkout",
+		Name:       "checkout",
 		Components: []Component{{Name: "checkout-backend"}, {Name: "checkout-bff"}},
 	}}
 	m := &model{cfg: Config{Steps: []StepTemplate{
@@ -526,7 +526,7 @@ func TestNewStartWizard_SystemsFunc_OverridesStaticSystems(t *testing.T) {
 			Label:       "Components",
 			Kind:        FieldKindSystemSelect,
 			Systems:     []System{{Name: "static-sys", Components: []Component{{Name: "static-comp"}}}},
-			SystemsFunc: func() []System { return dynamic },
+			SystemsFunc: func(_ WizardValues) []System { return dynamic },
 		}},
 	}}}}
 	wiz := newStartWizard(m, WizardValues{})
@@ -574,7 +574,7 @@ func TestNewStartWizard_OptionsFunc_OverridesStaticOptions(t *testing.T) {
 			Label:       "Namespace",
 			Kind:        FieldKindSingleSelect,
 			Options:     []string{"old-a", "old-b"},
-			OptionsFunc: func() []string { return []string{"new-x", "new-y", "new-z"} },
+			OptionsFunc: func(_ WizardValues) []string { return []string{"new-x", "new-y", "new-z"} },
 		}},
 	}}}}
 	wiz := newStartWizard(m, WizardValues{})
@@ -620,7 +620,7 @@ func TestValidateTemplates_BothOptionsAndOptionsFunc_Error(t *testing.T) {
 			ID:          "ns",
 			Kind:        FieldKindSingleSelect,
 			Options:     []string{"a", "b"},
-			OptionsFunc: func() []string { return []string{"c"} },
+			OptionsFunc: func(_ WizardValues) []string { return []string{"c"} },
 		}},
 	}})
 	if err == nil {
@@ -640,7 +640,7 @@ func TestValidateTemplates_BothSystemsAndSystemsFunc_Error(t *testing.T) {
 			ID:          "components",
 			Kind:        FieldKindSystemSelect,
 			Systems:     []System{{Name: "s", Components: []Component{{Name: "c"}}}},
-			SystemsFunc: func() []System { return nil },
+			SystemsFunc: func(_ WizardValues) []System { return nil },
 		}},
 	}})
 	if err == nil {
@@ -659,7 +659,7 @@ func TestValidateTemplates_OnlyOptionsFunc_Valid(t *testing.T) {
 		Fields: []FieldSpec{{
 			ID:          "ns",
 			Kind:        FieldKindSingleSelect,
-			OptionsFunc: func() []string { return []string{"a"} },
+			OptionsFunc: func(_ WizardValues) []string { return []string{"a"} },
 		}},
 	}})
 	if err != nil {
@@ -675,7 +675,7 @@ func TestValidateTemplates_OnlySystemsFunc_Valid(t *testing.T) {
 		Fields: []FieldSpec{{
 			ID:          "components",
 			Kind:        FieldKindSystemSelect,
-			SystemsFunc: func() []System { return nil },
+			SystemsFunc: func(_ WizardValues) []System { return nil },
 		}},
 	}})
 	if err != nil {
@@ -715,3 +715,169 @@ func TestMFETemplate_NoStopFunc(t *testing.T) {
 	}
 }
 
+// ── reEvalDynamicFields ───────────────────────────────────────────────────────
+
+func TestReEvalDynamicFields_SystemsFunc_ReactsToSelectChange(t *testing.T) {
+	devSystems := []System{{
+		Name:       "dev-sys",
+		Components: []Component{{Name: "dev-comp-a"}, {Name: "dev-comp-b"}},
+	}}
+	testSystems := []System{{
+		Name:       "test-sys",
+		Components: []Component{{Name: "test-comp-x"}},
+	}}
+
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "test"}},
+				selectIdx: 0, // "dev"
+			},
+			{
+				spec: FieldSpec{
+					ID:   "components",
+					Kind: FieldKindSystemSelect,
+					SystemsFunc: func(v WizardValues) []System {
+						if v.String("env") == "test" {
+							return testSystems
+						}
+						return devSystems
+					},
+				},
+				resolvedSystems: devSystems,
+				sysPickerItems: []pickerItem{
+					{isSystem: true, system: "dev-sys"},
+					{isSystem: false, system: "dev-sys", comp: "dev-comp-a"},
+					{isSystem: false, system: "dev-sys", comp: "dev-comp-b"},
+				},
+			},
+		},
+	}
+
+	// Simulate switching env to "test".
+	wiz.states[0].selectIdx = 1
+	wiz.reEvalDynamicFields()
+
+	items := wiz.states[1].sysPickerItems
+	if len(items) != 2 { // 1 header + 1 component
+		t.Fatalf("expected 2 picker items for test env, got %d: %v", len(items), items)
+	}
+	if items[0].system != "test-sys" {
+		t.Fatalf("expected test-sys header, got %q", items[0].system)
+	}
+}
+
+func TestReEvalDynamicFields_SystemsFunc_FiltersStaleSelections(t *testing.T) {
+	devSystems := []System{{
+		Name:       "dev-sys",
+		Components: []Component{{Name: "dev-comp-a"}},
+	}}
+	testSystems := []System{{
+		Name:       "test-sys",
+		Components: []Component{{Name: "test-comp-x"}},
+	}}
+
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "test"}},
+				selectIdx: 0,
+			},
+			{
+				spec: FieldSpec{
+					ID:   "components",
+					Kind: FieldKindSystemSelect,
+					SystemsFunc: func(v WizardValues) []System {
+						if v.String("env") == "test" {
+							return testSystems
+						}
+						return devSystems
+					},
+				},
+				resolvedSystems: devSystems,
+				multiValues:     []string{"dev-comp-a"}, // selected in dev
+				sysPickerItems: []pickerItem{
+					{isSystem: true, system: "dev-sys"},
+					{isSystem: false, system: "dev-sys", comp: "dev-comp-a"},
+				},
+			},
+		},
+	}
+
+	// Switch to test env — "dev-comp-a" no longer exists.
+	wiz.states[0].selectIdx = 1
+	wiz.reEvalDynamicFields()
+
+	if len(wiz.states[1].multiValues) != 0 {
+		t.Fatalf("expected stale selection to be removed, got %v", wiz.states[1].multiValues)
+	}
+}
+
+func TestReEvalDynamicFields_OptionsFunc_ReactsToSelectChange(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "prod"}},
+				selectIdx: 0,
+			},
+			{
+				spec: FieldSpec{
+					ID:   "ns",
+					Kind: FieldKindSingleSelect,
+					OptionsFunc: func(v WizardValues) []string {
+						if v.String("env") == "prod" {
+							return []string{"prod-ns-1", "prod-ns-2"}
+						}
+						return []string{"dev-ns-1"}
+					},
+				},
+				resolvedOptions: []string{"dev-ns-1"},
+				strPickerItems:  []string{"dev-ns-1"},
+			},
+		},
+	}
+
+	wiz.states[0].selectIdx = 1 // switch to prod
+	wiz.reEvalDynamicFields()
+
+	items := wiz.states[1].strPickerItems
+	if len(items) != 2 {
+		t.Fatalf("expected 2 prod namespaces, got %d: %v", len(items), items)
+	}
+	if items[0] != "prod-ns-1" {
+		t.Fatalf("expected prod-ns-1, got %q", items[0])
+	}
+}
+
+func TestReEvalDynamicFields_OptionsFunc_ClearsSingleValueIfGone(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "prod"}},
+				selectIdx: 0,
+			},
+			{
+				spec: FieldSpec{
+					ID:   "ns",
+					Kind: FieldKindSingleSelect,
+					OptionsFunc: func(v WizardValues) []string {
+						if v.String("env") == "prod" {
+							return []string{"prod-ns-1"}
+						}
+						return []string{"dev-ns-1"}
+					},
+				},
+				resolvedOptions: []string{"dev-ns-1"},
+				strPickerItems:  []string{"dev-ns-1"},
+				singleValue:     "dev-ns-1", // currently selected
+			},
+		},
+	}
+
+	wiz.states[0].selectIdx = 1 // switch to prod
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].singleValue != "" {
+		t.Fatalf("expected singleValue to be cleared, got %q", wiz.states[1].singleValue)
+	}
+}

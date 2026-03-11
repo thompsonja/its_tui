@@ -40,4 +40,3 @@ func LoadComponents(path string) (ComponentsFile, error) {
 	}
 	return cf, nil
 }
-

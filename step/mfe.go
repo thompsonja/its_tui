@@ -3,10 +3,10 @@ package step
 import (
 	"context"
 	"fmt"
+	"github.com/thompsonja/its_tui/config"
 	"os"
 	"os/exec"
 	"syscall"
-	"github.com/thompsonja/its_tui/config"
 )
 
 // MFEStep runs a micro-frontend command and streams output to the MFE panel.
@@ -17,7 +17,7 @@ type MFEStep struct {
 	pgid int // set by Start; used by Stop
 }
 
-func (s *MFEStep) ID() string             { return "mfe" }
+func (s *MFEStep) ID() string                 { return "mfe" }
 func (s *MFEStep) LogPath(name string) string { return config.MfeLogPath(name) }
 
 // Start launches the MFE command and returns once the process is running.

@@ -185,14 +185,14 @@ appear across all templates.
 
 ```go
 type FieldSpec struct {
-    ID          string         // key in WizardValues
-    Label       string         // display text
+    ID          string                    // key in WizardValues
+    Label       string                    // display text
     Kind        FieldKind
-    Options     []string       // for Select / SingleSelect / MultiSelect (static)
-    OptionsFunc func() []string // called at wizard-open; overrides Options if non-nil
-    Systems     []System       // for SystemSelect (static)
-    SystemsFunc func() []System // called at wizard-open; overrides Systems if non-nil
-    Default     int            // for Select: index of the default option
+    Options     []string                  // for Select / SingleSelect / MultiSelect (static)
+    OptionsFunc func(WizardValues) []string // called at wizard-open and on field change; overrides Options if non-nil
+    Systems     []System                  // for SystemSelect (static)
+    SystemsFunc func(WizardValues) []System // called at wizard-open and on field change; overrides Systems if non-nil
+    Default     int                       // for Select: index of the default option
 }
 ```
 
@@ -233,27 +233,30 @@ type FieldSpec struct {
 ### Dynamic Field Options
 
 `OptionsFunc` and `SystemsFunc` let you populate field choices at wizard-open time rather than at
-`Config` construction time. This is useful when a discovery step queries the cluster and stores
-results that the wizard then reads.
+`Config` construction time, and **re-evaluate reactively** after every field change. This is useful
+when a discovery step queries the cluster and stores results that the wizard then reads, or when
+one field's selection should drive the options shown in another field.
 
 ```go
-var liveComponents []tui.System // populated by a discovery step at runtime
+var systemsForEnv = map[string][]tui.System{
+    "dev":  devSystems,
+    "test": testSystems,
+}
 
-tui.SkaffoldTemplate(
-    buildSkaffold,
-    nil, // static Systems unused; replaced by SystemsFunc below
-)
-
-// Or build the StepTemplate directly:
 tui.StepTemplate{
     ID:    "skaffold",
     Panel: tui.PanelTopRight,
     Fields: []tui.FieldSpec{
+        {ID: "env", Label: "Environment", Kind: tui.FieldKindSelect,
+            Options: []string{"dev", "test"}, Default: 0},
         {
-            ID:          "components",
-            Label:       "Components",
-            Kind:        tui.FieldKindSystemSelect,
-            SystemsFunc: func() []tui.System { return liveComponents },
+            ID:    "components",
+            Label: "Components",
+            Kind:  tui.FieldKindSystemSelect,
+            SystemsFunc: func(v tui.WizardValues) []tui.System {
+                env := v.String("env")
+                return systemsForEnv[env] // map populated by a discovery step
+            },
         },
         {ID: "mode", Label: "Mode", Kind: tui.FieldKindSelect,
             Options: []string{"dev", "run", "debug"}},
@@ -269,14 +272,18 @@ The same pattern applies to `OptionsFunc` for `FieldKindSingleSelect` and `Field
     ID:          "namespace",
     Label:       "Namespace",
     Kind:        tui.FieldKindSingleSelect,
-    OptionsFunc: func() []string { return listNamespaces() }, // cached by a step
+    OptionsFunc: func(v tui.WizardValues) []string {
+        return listNamespacesForEnv(v.String("env")) // cached by a step
+    },
 }
 ```
 
-The function is called **once per wizard open**, synchronously. It is expected to be fast — a
-read of a variable or small file already populated by a running step, not a blocking network
-call. Setting both a static slice (`Options`/`Systems`) and its func counterpart on the same
-field is rejected at startup with a clear error.
+The functions are called **at wizard-open** (with the initial values) and **after every field
+change**, synchronously. They must be fast — a read of a variable or small slice already
+populated by a running step, not a blocking network call. When a dependent field's options change,
+any selections that no longer appear in the new list are automatically dropped. Setting both a
+static slice (`Options`/`Systems`) and its func counterpart on the same field is rejected at
+startup with a clear error.
 
 ### `WizardValues`
 

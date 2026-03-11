@@ -283,6 +283,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.helpOverlayVP, cmd = m.helpOverlayVP.Update(msg)
 					case overlayWizard:
 						m.handleWizardKey(msg)
+						if m.wizard != nil {
+							m.wizard.reEvalDynamicFields()
+						}
 					}
 				} else if msg.String() == "enter" {
 					if line := m.input.Value(); line != "" {
