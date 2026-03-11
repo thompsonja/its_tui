@@ -112,11 +112,21 @@ type FieldSpec struct {
 	ID          string // unique identifier; used as key in WizardValues
 	Label       string // display label
 	Kind        FieldKind
-	Options     []string                    // choices for Select / SingleSelect / MultiSelect
-	OptionsFunc func(WizardValues) []string // called at wizard-open and on field change; overrides Options if non-nil
-	Systems     []System                    // hierarchy for SystemSelect
-	SystemsFunc func(WizardValues) []System // called at wizard-open and on field change; overrides Systems if non-nil
+	OptionsFunc func(WizardValues) []string // provides choices for Select / SingleSelect / MultiSelect
+	SystemsFunc func(WizardValues) []System // provides hierarchy for SystemSelect
 	Default     int                         // for Select: index of the default option
+}
+
+// StaticOptions returns an OptionsFunc that always returns the given options.
+// Use for fields whose options never change based on other selections.
+func StaticOptions(opts ...string) func(WizardValues) []string {
+	return func(WizardValues) []string { return opts }
+}
+
+// StaticSystems returns a SystemsFunc that always returns the given systems.
+// Use for system hierarchies that never change based on other selections.
+func StaticSystems(systems ...System) func(WizardValues) []System {
+	return func(WizardValues) []System { return systems }
 }
 
 // WizardValues holds the collected user selections from the wizard.
@@ -255,14 +265,6 @@ var cancelTest context.CancelFunc = func() {}
 func validateTemplates(steps []StepTemplate) error {
 	knownIDs := make(map[string]bool, len(steps))
 	for _, t := range steps {
-		for _, f := range t.Fields {
-			if len(f.Options) > 0 && f.OptionsFunc != nil {
-				return fmt.Errorf("field %q has both Options and OptionsFunc set; use one or the other", f.ID)
-			}
-			if len(f.Systems) > 0 && f.SystemsFunc != nil {
-				return fmt.Errorf("field %q has both Systems and SystemsFunc set; use one or the other", f.ID)
-			}
-		}
 		if t.Build == nil {
 			label := t.Label
 			if label == "" {

@@ -88,7 +88,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 				s.selectIdx--
 			}
 		case "right":
-			if s.selectIdx < len(s.spec.Options)-1 {
+			if s.selectIdx < len(s.resolvedOptions)-1 {
 				s.selectIdx++
 			}
 		case "up":
@@ -171,7 +171,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 			case "down":
 				next()
 			case "enter":
-				if len(s.spec.Options) > 0 {
+				if len(s.resolvedOptions) > 0 {
 					s.pickerOpen = true
 					s.pickerSearch.SetValue("")
 					s.updateStrFilter()

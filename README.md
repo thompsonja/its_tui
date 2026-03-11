@@ -46,7 +46,7 @@ func main() {
         Steps: []tui.StepTemplate{
             tui.MinikubeTemplate(),
             tui.KubectlTemplate(),
-            tui.SkaffoldTemplate(mySkaffoldGenerator, mySystems),
+            tui.SkaffoldTemplate(mySkaffoldGenerator, mySystemsFunc),
             tui.MFETemplate([]string{"checkout-mfe", "user-mfe"}, nil),
         },
     }
@@ -185,15 +185,20 @@ appear across all templates.
 
 ```go
 type FieldSpec struct {
-    ID          string                    // key in WizardValues
-    Label       string                    // display text
+    ID          string                      // key in WizardValues
+    Label       string                      // display text
     Kind        FieldKind
-    Options     []string                  // for Select / SingleSelect / MultiSelect (static)
-    OptionsFunc func(WizardValues) []string // called at wizard-open and on field change; overrides Options if non-nil
-    Systems     []System                  // for SystemSelect (static)
-    SystemsFunc func(WizardValues) []System // called at wizard-open and on field change; overrides Systems if non-nil
-    Default     int                       // for Select: index of the default option
+    OptionsFunc func(WizardValues) []string // provides choices for Select / SingleSelect / MultiSelect
+    SystemsFunc func(WizardValues) []System // provides hierarchy for SystemSelect
+    Default     int                         // for Select: index of the default option
 }
+```
+
+Use `StaticOptions` and `StaticSystems` helper functions for fields with fixed choices:
+
+```go
+tui.StaticOptions("dev", "staging", "prod")  // returns an OptionsFunc
+tui.StaticSystems(systems...)                 // returns a SystemsFunc
 ```
 
 | `FieldKind`            | Interaction                                          | Read via           |
@@ -207,24 +212,24 @@ type FieldSpec struct {
 ```go
 // Select: arrow keys choose from a fixed list
 {ID: "env", Label: "Environment", Kind: tui.FieldKindSelect,
-    Options: []string{"dev", "staging", "prod"}, Default: 0}
+    OptionsFunc: tui.StaticOptions("dev", "staging", "prod"), Default: 0}
 
 // SingleSelect: type to filter, Enter to confirm
 {ID: "region", Label: "Region", Kind: tui.FieldKindSingleSelect,
-    Options: []string{"us-east-1", "eu-west-1", "ap-southeast-1"}}
+    OptionsFunc: tui.StaticOptions("us-east-1", "eu-west-1", "ap-southeast-1")}
 
 // MultiSelect: type to filter, Enter to toggle
 {ID: "features", Label: "Features", Kind: tui.FieldKindMultiSelect,
-    Options: []string{"auth", "payments", "notifications"}}
+    OptionsFunc: tui.StaticOptions("auth", "payments", "notifications")}
 
 // SystemSelect: hierarchical tree; toggle whole systems or individual components
 {ID: "components", Label: "Components", Kind: tui.FieldKindSystemSelect,
-    Systems: []tui.System{
+    SystemsFunc: tui.StaticSystems([]tui.System{
         {Name: "checkout", Components: []tui.Component{
             {Name: "checkout-backend"},
             {Name: "checkout-bff"},
         }},
-    }}
+    }...)}
 
 // Text: free input, e.g. a namespace override
 {ID: "namespace", Label: "Namespace", Kind: tui.FieldKindText}
@@ -232,10 +237,11 @@ type FieldSpec struct {
 
 ### Dynamic Field Options
 
-`OptionsFunc` and `SystemsFunc` let you populate field choices at wizard-open time rather than at
-`Config` construction time, and **re-evaluate reactively** after every field change. This is useful
-when a discovery step queries the cluster and stores results that the wizard then reads, or when
-one field's selection should drive the options shown in another field.
+All fields use `OptionsFunc` or `SystemsFunc` to provide their choices. For static lists, use
+the `StaticOptions` or `StaticSystems` helpers. For dynamic behavior, provide your own function
+that **re-evaluates reactively** after every field change. This is useful when a discovery step
+queries the cluster and stores results that the wizard then reads, or when one field's selection
+should drive the options shown in another field.
 
 ```go
 var systemsForEnv = map[string][]tui.System{
@@ -248,7 +254,7 @@ tui.StepTemplate{
     Panel: tui.PanelTopRight,
     Fields: []tui.FieldSpec{
         {ID: "env", Label: "Environment", Kind: tui.FieldKindSelect,
-            Options: []string{"dev", "test"}, Default: 0},
+            OptionsFunc: tui.StaticOptions("dev", "test"), Default: 0},
         {
             ID:    "components",
             Label: "Components",
@@ -259,13 +265,13 @@ tui.StepTemplate{
             },
         },
         {ID: "mode", Label: "Mode", Kind: tui.FieldKindSelect,
-            Options: []string{"dev", "run", "debug"}},
+            OptionsFunc: tui.StaticOptions("dev", "run", "debug")},
     },
     Build: buildSkaffold,
 }
 ```
 
-The same pattern applies to `OptionsFunc` for `FieldKindSingleSelect` and `FieldKindMultiSelect`:
+The same pattern applies to `OptionsFunc` for all field kinds that accept options:
 
 ```go
 {
@@ -281,9 +287,7 @@ The same pattern applies to `OptionsFunc` for `FieldKindSingleSelect` and `Field
 The functions are called **at wizard-open** (with the initial values) and **after every field
 change**, synchronously. They must be fast — a read of a variable or small slice already
 populated by a running step, not a blocking network call. When a dependent field's options change,
-any selections that no longer appear in the new list are automatically dropped. Setting both a
-static slice (`Options`/`Systems`) and its func counterpart on the same field is rejected at
-startup with a clear error.
+any selections that no longer appear in the new list are automatically dropped.
 
 ### `WizardValues`
 
@@ -339,7 +343,7 @@ tui.KubectlTemplate()
 // WaitFor: "minikube", AutoActivate: true, Hidden: true
 ```
 
-### `SkaffoldTemplate(generate, systems)`
+### `SkaffoldTemplate(generate, systemsfunc)`
 
 Runs `skaffold dev`, `run`, or `debug`. Contributes `components` (SystemSelect) and `mode`
 (Select: dev/run/debug) wizard fields. Waits for `"minikube"`. Routes output to `PanelTopRight`.
@@ -353,11 +357,36 @@ tui.SkaffoldTemplate(
         // Return ("", nil, nil) to skip skaffold entirely.
         return generateSkaffold(comps, mode)
     },
-    []tui.System{
-        {Name: "backend", Components: []tui.Component{
-            {Name: "api-service"},
-            {Name: "worker"},
-        }},
+    func(v tui.WizardValues) []tui.System {
+        return []tui.System{
+            {Name: "backend", Components: []tui.Component{
+                {Name: "api-service"},
+                {Name: "worker"},
+            }},
+        }
+    },
+)
+```
+
+The `systemsfunc` parameter enables dynamic system selection based on other wizard fields. For
+example, to show different components per environment:
+
+```go
+var systemsByEnv = map[string][]tui.System{
+    "dev": {
+        {Name: "checkout", Components: []tui.Component{{Name: "checkout-backend"}}},
+    },
+    "prod": {
+        {Name: "checkout", Components: []tui.Component{{Name: "checkout-backend"}}},
+        {Name: "analytics", Components: []tui.Component{{Name: "analytics-service"}}},
+    },
+}
+
+tui.SkaffoldTemplate(
+    generateFunc,
+    func(v tui.WizardValues) []tui.System {
+        env := v.String("env")
+        return systemsByEnv[env] // re-evaluated when "env" field changes
     },
 )
 ```
@@ -555,23 +584,6 @@ import (
 )
 
 func main() {
-    systems := []tui.System{
-        {
-            Name: "checkout",
-            Components: []tui.Component{
-                {Name: "checkout-backend"},
-                {Name: "checkout-bff"},
-            },
-        },
-        {
-            Name: "user",
-            Components: []tui.Component{
-                {Name: "user-service"},
-                {Name: "user-bff"},
-            },
-        },
-    }
-
     cfg := tui.Config{
         InstanceName: "Platform",
         StatusLine: func(name string) string {
@@ -591,11 +603,11 @@ func main() {
                 Hidden: true,
                 Fields: []tui.FieldSpec{
                     {
-                        ID:      "env",
-                        Label:   "Environment",
-                        Kind:    tui.FieldKindSelect,
-                        Options: []string{"dev", "test"},
-                        Default: 0,
+                        ID:          "env",
+                        Label:       "Environment",
+                        Kind:        tui.FieldKindSelect,
+                        OptionsFunc: tui.StaticOptions("dev", "test"),
+                        Default:     0,
                     },
                 },
                 Build: func(v tui.WizardValues) (tui.Step, error) { return nil, nil },
@@ -608,7 +620,24 @@ func main() {
                     path, profiles, err := generateSkaffold(env, comps)
                     return path, profiles, err
                 },
-                systems,
+                func(v tui.WizardValues) []tui.System {
+                    return []tui.System{
+                        {
+                            Name: "checkout",
+                            Components: []tui.Component{
+                                {Name: "checkout-backend"},
+                                {Name: "checkout-bff"},
+                            },
+                        },
+                        {
+                            Name: "user",
+                            Components: []tui.Component{
+                                {Name: "user-service"},
+                                {Name: "user-bff"},
+                            },
+                        },
+                    }
+                },
             ),
 
             tui.MFETemplate(

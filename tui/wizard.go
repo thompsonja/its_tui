@@ -59,8 +59,8 @@ func (w *startWizard) buildValues() WizardValues {
 	for _, s := range w.states {
 		switch s.spec.Kind {
 		case FieldKindSelect:
-			if s.selectIdx >= 0 && s.selectIdx < len(s.spec.Options) {
-				v.str[s.spec.ID] = s.spec.Options[s.selectIdx]
+			if s.selectIdx >= 0 && s.selectIdx < len(s.resolvedOptions) {
+				v.str[s.spec.ID] = s.resolvedOptions[s.selectIdx]
 			}
 		case FieldKindSingleSelect:
 			if s.singleValue != "" {
@@ -212,11 +212,41 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 	for i, spec := range fields {
 		s := fieldState{spec: spec, selectIdx: spec.Default}
 
+		// Set up picker search inputs and resolve initial item lists.
+		switch spec.Kind {
+		case FieldKindSystemSelect:
+			search := textinput.New()
+			search.Placeholder = "search systems or components…"
+			search.Width = inputW
+			s.pickerSearch = search
+			systems := spec.SystemsFunc(initial)
+			s.resolvedSystems = systems
+			for _, sys := range systems {
+				s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
+				for _, c := range sys.Components {
+					s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
+				}
+			}
+		case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
+			search := textinput.New()
+			search.Placeholder = "search…"
+			search.Width = inputW
+			s.pickerSearch = search
+			opts := spec.OptionsFunc(initial)
+			s.resolvedOptions = opts
+			s.strPickerItems = append([]string(nil), opts...)
+		case FieldKindText:
+			ti := textinput.New()
+			ti.Placeholder = "…"
+			ti.Width = inputW
+			s.pickerSearch = ti
+		}
+
 		// Pre-populate from initial values (last session's wizard selections).
 		switch spec.Kind {
 		case FieldKindSelect:
 			if v := initial.String(spec.ID); v != "" {
-				for idx, opt := range spec.Options {
+				for idx, opt := range s.resolvedOptions {
 					if opt == v {
 						s.selectIdx = idx
 						break
@@ -230,46 +260,9 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 				s.multiValues = append([]string(nil), vals...)
 			}
 		case FieldKindText:
-			// pre-populated below in the setup switch
-		}
-
-		// Set up picker search inputs and initial item lists.
-		switch spec.Kind {
-		case FieldKindSystemSelect:
-			search := textinput.New()
-			search.Placeholder = "search systems or components…"
-			search.Width = inputW
-			s.pickerSearch = search
-			systems := spec.Systems
-			if spec.SystemsFunc != nil {
-				systems = spec.SystemsFunc(initial)
-			}
-			s.resolvedSystems = systems
-			for _, sys := range systems {
-				s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: true, system: sys.Name})
-				for _, c := range sys.Components {
-					s.sysPickerItems = append(s.sysPickerItems, pickerItem{isSystem: false, system: sys.Name, comp: c.Name})
-				}
-			}
-		case FieldKindSingleSelect, FieldKindMultiSelect:
-			search := textinput.New()
-			search.Placeholder = "search…"
-			search.Width = inputW
-			s.pickerSearch = search
-			opts := spec.Options
-			if spec.OptionsFunc != nil {
-				opts = spec.OptionsFunc(initial)
-			}
-			s.resolvedOptions = opts
-			s.strPickerItems = append([]string(nil), opts...)
-		case FieldKindText:
-			ti := textinput.New()
-			ti.Placeholder = "…"
-			ti.Width = inputW
 			if v := initial.String(spec.ID); v != "" {
-				ti.SetValue(v)
+				s.pickerSearch.SetValue(v)
 			}
-			s.pickerSearch = ti
 		}
 		states[i] = s
 	}
@@ -289,9 +282,6 @@ func (w *startWizard) reEvalDynamicFields() {
 		s := &w.states[i]
 		switch s.spec.Kind {
 		case FieldKindSystemSelect:
-			if s.spec.SystemsFunc == nil {
-				continue
-			}
 			newSystems := s.spec.SystemsFunc(vals)
 			s.resolvedSystems = newSystems
 			// Drop multiValues no longer present in new systems.
@@ -320,12 +310,18 @@ func (w *startWizard) reEvalDynamicFields() {
 			}
 			s.updateSysFilter()
 
-		case FieldKindSingleSelect, FieldKindMultiSelect:
-			if s.spec.OptionsFunc == nil {
-				continue
-			}
+		case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
 			newOpts := s.spec.OptionsFunc(vals)
 			s.resolvedOptions = newOpts
+			if s.spec.Kind == FieldKindSelect {
+				// Validate that selectIdx is still in range.
+				if s.selectIdx >= len(newOpts) && len(newOpts) > 0 {
+					s.selectIdx = len(newOpts) - 1
+				}
+				if len(newOpts) == 0 {
+					s.selectIdx = 0
+				}
+			}
 			if s.spec.Kind == FieldKindSingleSelect {
 				// Clear selection if it no longer exists.
 				found := false

@@ -35,18 +35,18 @@ func main() {
 				Hidden: true,
 				Fields: []tui.FieldSpec{
 					{
-						ID:      "env",
-						Label:   "Environment",
-						Kind:    tui.FieldKindSelect,
-						Options: []string{"dev", "test"},
-						Default: 0,
+						ID:          "env",
+						Label:       "Environment",
+						Kind:        tui.FieldKindSelect,
+						OptionsFunc: tui.StaticOptions("dev", "test"),
+						Default:     0,
 					},
 					{
-						ID:      "api_port",
-						Label:   "API Port",
-						Kind:    tui.FieldKindSelect,
-						Options: []string{"9001", "9002", "9003"},
-						Default: 0,
+						ID:          "api_port",
+						Label:       "API Port",
+						Kind:        tui.FieldKindSelect,
+						OptionsFunc: tui.StaticOptions("9001", "9002", "9003"),
+						Default:     0,
 					},
 				},
 				Build: func(v tui.WizardValues) (tui.Step, error) {
@@ -63,42 +63,44 @@ func main() {
 					}
 					return generateSkaffoldYAML(sampleDir(), env, port)
 				},
-				[]tui.System{
-					{
-						Name: "checkout",
-						Components: []tui.Component{
-							{Name: "checkout-backend"},
-							{Name: "checkout-bff"},
+				func(v tui.WizardValues) []tui.System {
+					return []tui.System{
+						{
+							Name: "checkout",
+							Components: []tui.Component{
+								{Name: "checkout-backend"},
+								{Name: "checkout-bff"},
+							},
 						},
-					},
-					{
-						Name: "user",
-						Components: []tui.Component{
-							{Name: "user-service"},
-							{Name: "user-bff"},
+						{
+							Name: "user",
+							Components: []tui.Component{
+								{Name: "user-service"},
+								{Name: "user-bff"},
+							},
 						},
-					},
-					{
-						Name: "product",
-						Components: []tui.Component{
-							{Name: "product-service"},
-							{Name: "product-bff"},
+						{
+							Name: "product",
+							Components: []tui.Component{
+								{Name: "product-service"},
+								{Name: "product-bff"},
+							},
 						},
-					},
-					{
-						Name: "order",
-						Components: []tui.Component{
-							{Name: "order-service"},
-							{Name: "order-bff"},
+						{
+							Name: "order",
+							Components: []tui.Component{
+								{Name: "order-service"},
+								{Name: "order-bff"},
+							},
 						},
-					},
-					{
-						Name: "analytics",
-						Components: []tui.Component{
-							{Name: "analytics-backend"},
-							{Name: "analytics-bff"},
+						{
+							Name: "analytics",
+							Components: []tui.Component{
+								{Name: "analytics-backend"},
+								{Name: "analytics-bff"},
+							},
 						},
-					},
+					}
 				},
 			),
 			tui.MFETemplate(

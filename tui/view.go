@@ -618,7 +618,7 @@ func renderSelectField(i int, s *fieldState, ws wizStyles, activeField, labelW i
 	focused := activeField == i
 	return []string{
 		"  " + wizLabel(s.spec.Label, activeField, i, labelW) + "  " +
-			horizSelector(s.selectIdx, s.spec.Options, focused, ws.hl, ws.sel, ws.dim),
+			horizSelector(s.selectIdx, s.resolvedOptions, focused, ws.hl, ws.sel, ws.dim),
 	}
 }
 
@@ -771,7 +771,7 @@ func renderSingleSelectField(i int, s *fieldState, ws wizStyles, activeField, la
 			display = ws.dim.Render(s.singleValue)
 		}
 		lines = append(lines, "  "+wizLabel(s.spec.Label, activeField, i, labelW)+"  "+display)
-		if focused && len(s.spec.Options) > 0 {
+		if focused && len(s.resolvedOptions) > 0 {
 			lines = append(lines, "  "+strings.Repeat(" ", labelW+4)+ws.dim.Render("[ Enter to select ]"))
 		}
 	}
@@ -911,7 +911,7 @@ func (m model) renderWizardCustom() string {
 		case s.spec.Kind == FieldKindSystemSelect:
 			hintText = "  ↑↓ navigate  ·  x remove  ·  Enter add  ·  Tab next field"
 		case s.spec.Kind == FieldKindSingleSelect:
-			if len(s.spec.Options) > 0 {
+			if len(s.resolvedOptions) > 0 {
 				hintText = "  Enter to pick  ·  x clear  ·  ↑↓ or Tab to move  ·  Esc cancel"
 			} else {
 				hintText = "  ↑↓ or Tab to move  ·  Esc cancel"

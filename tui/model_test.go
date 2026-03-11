@@ -143,7 +143,7 @@ func newTestSysField() *fieldState {
 			{Name: "user-bff"},
 		}},
 	}
-	spec := FieldSpec{ID: "components", Kind: FieldKindSystemSelect, Systems: systems}
+	spec := FieldSpec{ID: "components", Kind: FieldKindSystemSelect, SystemsFunc: StaticSystems(systems...)}
 	s := &fieldState{spec: spec, pickerSearch: si, resolvedSystems: systems}
 	// Initialise full items list (mirrors newStartWizard logic).
 	for _, sys := range systems {

@@ -15,8 +15,8 @@ func MinikubeTemplate() StepTemplate {
 			_ = (&MinikubeStep{}).Stop(ctx, name)
 		},
 		Fields: []FieldSpec{
-			{ID: "cpu", Label: "CPU", Kind: FieldKindSelect, Options: []string{"2", "4", "8", "16"}, Default: 1},
-			{ID: "ram", Label: "RAM", Kind: FieldKindSelect, Options: []string{"2g", "4g", "8g", "16g"}, Default: 1},
+			{ID: "cpu", Label: "CPU", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4", "8", "16"), Default: 1},
+			{ID: "ram", Label: "RAM", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2g", "4g", "8g", "16g"), Default: 1},
 		},
 		Build: func(v WizardValues) (Step, error) {
 			cpu := v.String("cpu")
@@ -57,8 +57,10 @@ func KubectlTemplate() StepTemplate {
 // contributed by this template, as well as any fields from other templates in
 // the pipeline (e.g. an "env" field from a companion step).
 //
-// systems provides the hierarchical system/component data shown in the wizard.
-func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error), systems []System) StepTemplate {
+// systemsfunc provides the hierarchical system/component data shown in the wizard.
+// It is called at wizard-open and after every field change, enabling dynamic
+// updates based on other field selections.
+func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error), systemsfunc func(WizardValues) []System) StepTemplate {
 	return StepTemplate{
 		ID:    "skaffold",
 		Panel: PanelTopRight,
@@ -71,8 +73,8 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 		},
 		WaitFor: "minikube",
 		Fields: []FieldSpec{
-			{ID: "components", Label: "Components", Kind: FieldKindSystemSelect, Systems: systems},
-			{ID: "mode", Label: "Mode", Kind: FieldKindSelect, Options: []string{"dev", "run", "debug"}, Default: 0},
+			{ID: "components", Label: "Components", Kind: FieldKindSystemSelect, SystemsFunc: systemsfunc},
+			{ID: "mode", Label: "Mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "run", "debug"), Default: 0},
 		},
 		Build: func(v WizardValues) (Step, error) {
 			if generate == nil {
@@ -106,7 +108,7 @@ func MFETemplate(mfes []string, run func(name string, v WizardValues) MFECommand
 		Panel: PanelBottomRight,
 		Label: "MFE",
 		Fields: []FieldSpec{
-			{ID: "mfe", Label: "MFE", Kind: FieldKindSingleSelect, Options: mfes},
+			{ID: "mfe", Label: "MFE", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions(mfes...)},
 		},
 		Build: func(v WizardValues) (Step, error) {
 			mfe := v.String("mfe")

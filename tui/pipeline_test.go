@@ -260,8 +260,9 @@ func TestBuildPipelineFromState_IgnoresBuildError(t *testing.T) {
 func TestBuildValues_Select(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{{
-			spec:      FieldSpec{ID: "cpu", Kind: FieldKindSelect, Options: []string{"2", "4", "8"}},
-			selectIdx: 1,
+			spec:            FieldSpec{ID: "cpu", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4", "8")},
+			resolvedOptions: []string{"2", "4", "8"},
+			selectIdx:       1,
 		}},
 	}
 	v := wiz.buildValues()
@@ -273,8 +274,9 @@ func TestBuildValues_Select(t *testing.T) {
 func TestBuildValues_Select_OutOfRange(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{{
-			spec:      FieldSpec{ID: "cpu", Kind: FieldKindSelect, Options: []string{"2", "4"}},
-			selectIdx: 99, // out of range
+			spec:            FieldSpec{ID: "cpu", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4")},
+			resolvedOptions: []string{"2", "4"},
+			selectIdx:       99, // out of range
 		}},
 	}
 	v := wiz.buildValues()
@@ -326,7 +328,7 @@ func TestBuildValues_SystemSelect(t *testing.T) {
 func TestBuildValues_MultipleFields(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{
-			{spec: FieldSpec{ID: "cpu", Kind: FieldKindSelect, Options: []string{"2", "4"}}, selectIdx: 0},
+			{spec: FieldSpec{ID: "cpu", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4")}, resolvedOptions: []string{"2", "4"}, selectIdx: 0},
 			{spec: FieldSpec{ID: "mfe", Kind: FieldKindSingleSelect}, singleValue: "my-mfe"},
 			{spec: FieldSpec{ID: "tags", Kind: FieldKindMultiSelect}, multiValues: []string{"a", "b"}},
 		},
@@ -479,7 +481,7 @@ func TestNewStartWizard_PrePopulatesSystemSelect(t *testing.T) {
 		Components: []Component{{Name: "checkout-backend"}, {Name: "checkout-bff"}},
 	}}
 	m := &model{cfg: Config{Steps: []StepTemplate{
-		SkaffoldTemplate(nil, systems),
+		SkaffoldTemplate(nil, func(v WizardValues) []System { return systems }),
 	}}}
 	initial := NewWizardValues(
 		map[string]string{"mode": "debug"},
@@ -508,178 +510,6 @@ func TestNewStartWizard_EmptyInitialLeavesDefaults(t *testing.T) {
 	}
 	if wiz.states[1].selectIdx != 1 {
 		t.Fatalf("expected default ramIdx=1, got %d", wiz.states[1].selectIdx)
-	}
-}
-
-// ── Dynamic field options (OptionsFunc / SystemsFunc) ─────────────────────────
-
-func TestNewStartWizard_SystemsFunc_OverridesStaticSystems(t *testing.T) {
-	dynamic := []System{{
-		Name:       "dynamic-sys",
-		Components: []Component{{Name: "dyn-comp-a"}, {Name: "dyn-comp-b"}},
-	}}
-	m := &model{cfg: Config{Steps: []StepTemplate{{
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "components",
-			Label:       "Components",
-			Kind:        FieldKindSystemSelect,
-			Systems:     []System{{Name: "static-sys", Components: []Component{{Name: "static-comp"}}}},
-			SystemsFunc: func(_ WizardValues) []System { return dynamic },
-		}},
-	}}}}
-	wiz := newStartWizard(m, WizardValues{})
-	items := wiz.states[0].sysPickerItems
-	if len(items) != 3 { // 1 header + 2 components
-		t.Fatalf("expected 3 picker items, got %d: %v", len(items), items)
-	}
-	if items[0].system != "dynamic-sys" {
-		t.Fatalf("expected dynamic-sys header, got %q", items[0].system)
-	}
-}
-
-func TestNewStartWizard_SystemsFunc_NilFallsBackToStatic(t *testing.T) {
-	static := []System{{
-		Name:       "static-sys",
-		Components: []Component{{Name: "static-comp"}},
-	}}
-	m := &model{cfg: Config{Steps: []StepTemplate{{
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:      "components",
-			Label:   "Components",
-			Kind:    FieldKindSystemSelect,
-			Systems: static,
-			// SystemsFunc is nil
-		}},
-	}}}}
-	wiz := newStartWizard(m, WizardValues{})
-	items := wiz.states[0].sysPickerItems
-	if len(items) != 2 { // 1 header + 1 component
-		t.Fatalf("expected 2 picker items, got %d: %v", len(items), items)
-	}
-	if items[0].system != "static-sys" {
-		t.Fatalf("expected static-sys header, got %q", items[0].system)
-	}
-}
-
-func TestNewStartWizard_OptionsFunc_OverridesStaticOptions(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "ns",
-			Label:       "Namespace",
-			Kind:        FieldKindSingleSelect,
-			Options:     []string{"old-a", "old-b"},
-			OptionsFunc: func(_ WizardValues) []string { return []string{"new-x", "new-y", "new-z"} },
-		}},
-	}}}}
-	wiz := newStartWizard(m, WizardValues{})
-	items := wiz.states[0].strPickerItems
-	if len(items) != 3 {
-		t.Fatalf("expected 3 items, got %d: %v", len(items), items)
-	}
-	if items[0] != "new-x" {
-		t.Fatalf("expected new-x, got %q", items[0])
-	}
-}
-
-func TestNewStartWizard_OptionsFunc_NilFallsBackToStatic(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:      "ns",
-			Label:   "Namespace",
-			Kind:    FieldKindMultiSelect,
-			Options: []string{"alpha", "beta"},
-			// OptionsFunc is nil
-		}},
-	}}}}
-	wiz := newStartWizard(m, WizardValues{})
-	items := wiz.states[0].strPickerItems
-	if len(items) != 2 {
-		t.Fatalf("expected 2 items, got %d: %v", len(items), items)
-	}
-	if items[0] != "alpha" {
-		t.Fatalf("expected alpha, got %q", items[0])
-	}
-}
-
-// ── validateTemplates: OptionsFunc / SystemsFunc conflicts ────────────────────
-
-func TestValidateTemplates_BothOptionsAndOptionsFunc_Error(t *testing.T) {
-	err := validateTemplates([]StepTemplate{{
-		ID:    "x",
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "ns",
-			Kind:        FieldKindSingleSelect,
-			Options:     []string{"a", "b"},
-			OptionsFunc: func(_ WizardValues) []string { return []string{"c"} },
-		}},
-	}})
-	if err == nil {
-		t.Fatal("expected error when both Options and OptionsFunc are set")
-	}
-	if !strings.Contains(err.Error(), "ns") {
-		t.Fatalf("error should mention field ID %q, got: %v", "ns", err)
-	}
-}
-
-func TestValidateTemplates_BothSystemsAndSystemsFunc_Error(t *testing.T) {
-	err := validateTemplates([]StepTemplate{{
-		ID:    "x",
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "components",
-			Kind:        FieldKindSystemSelect,
-			Systems:     []System{{Name: "s", Components: []Component{{Name: "c"}}}},
-			SystemsFunc: func(_ WizardValues) []System { return nil },
-		}},
-	}})
-	if err == nil {
-		t.Fatal("expected error when both Systems and SystemsFunc are set")
-	}
-	if !strings.Contains(err.Error(), "components") {
-		t.Fatalf("error should mention field ID %q, got: %v", "components", err)
-	}
-}
-
-func TestValidateTemplates_OnlyOptionsFunc_Valid(t *testing.T) {
-	err := validateTemplates([]StepTemplate{{
-		ID:    "x",
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "ns",
-			Kind:        FieldKindSingleSelect,
-			OptionsFunc: func(_ WizardValues) []string { return []string{"a"} },
-		}},
-	}})
-	if err != nil {
-		t.Fatalf("OptionsFunc alone should be valid: %v", err)
-	}
-}
-
-func TestValidateTemplates_OnlySystemsFunc_Valid(t *testing.T) {
-	err := validateTemplates([]StepTemplate{{
-		ID:    "x",
-		Label: "x",
-		Build: fakeBuild("x", nil),
-		Fields: []FieldSpec{{
-			ID:          "components",
-			Kind:        FieldKindSystemSelect,
-			SystemsFunc: func(_ WizardValues) []System { return nil },
-		}},
-	}})
-	if err != nil {
-		t.Fatalf("SystemsFunc alone should be valid: %v", err)
 	}
 }
 
@@ -730,8 +560,9 @@ func TestReEvalDynamicFields_SystemsFunc_ReactsToSelectChange(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{
 			{
-				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "test"}},
-				selectIdx: 0, // "dev"
+				spec:            FieldSpec{ID: "env", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "test")},
+				resolvedOptions: []string{"dev", "test"},
+				selectIdx:       0, // "dev"
 			},
 			{
 				spec: FieldSpec{
@@ -780,8 +611,9 @@ func TestReEvalDynamicFields_SystemsFunc_FiltersStaleSelections(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{
 			{
-				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "test"}},
-				selectIdx: 0,
+				spec:            FieldSpec{ID: "env", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "test")},
+				resolvedOptions: []string{"dev", "test"},
+				selectIdx:       0,
 			},
 			{
 				spec: FieldSpec{
@@ -817,8 +649,9 @@ func TestReEvalDynamicFields_OptionsFunc_ReactsToSelectChange(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{
 			{
-				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "prod"}},
-				selectIdx: 0,
+				spec:            FieldSpec{ID: "env", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "prod")},
+				resolvedOptions: []string{"dev", "prod"},
+				selectIdx:       0,
 			},
 			{
 				spec: FieldSpec{
@@ -853,8 +686,9 @@ func TestReEvalDynamicFields_OptionsFunc_ClearsSingleValueIfGone(t *testing.T) {
 	wiz := &startWizard{
 		states: []fieldState{
 			{
-				spec:      FieldSpec{ID: "env", Kind: FieldKindSelect, Options: []string{"dev", "prod"}},
-				selectIdx: 0,
+				spec:            FieldSpec{ID: "env", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "prod")},
+				resolvedOptions: []string{"dev", "prod"},
+				selectIdx:       0,
 			},
 			{
 				spec: FieldSpec{
