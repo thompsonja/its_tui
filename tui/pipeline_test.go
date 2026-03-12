@@ -115,12 +115,27 @@ func TestBuildDefsFromTemplates_WiresPanel(t *testing.T) {
 func TestBuildDefsFromTemplates_WiresWaitFor(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{{
 		Label:   "x",
-		WaitFor: "dep",
+		WaitFor: []string{"dep"},
 		Build:   fakeBuild("x", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if defs[0].WaitFor != "dep" {
+	if defs[0].WaitFor[0] != "dep" {
 		t.Fatalf("expected dep, got %q", defs[0].WaitFor)
+	}
+}
+
+func TestBuildDefsFromTemplates_WiresMultipleWaitFor(t *testing.T) {
+	m := &model{cfg: Config{Steps: []StepTemplate{{
+		Label:   "x",
+		WaitFor: []string{"a", "b"},
+		Build:   fakeBuild("x", nil),
+	}}}}
+	defs, _ := m.buildDefsFromTemplates(WizardValues{})
+	if len(defs[0].WaitFor) != 2 {
+		t.Fatalf("expected 2 WaitFor entries, got %d", len(defs[0].WaitFor))
+	}
+	if defs[0].WaitFor[0] != "a" || defs[0].WaitFor[1] != "b" {
+		t.Fatalf("expected [a b], got %v", defs[0].WaitFor)
 	}
 }
 
@@ -402,7 +417,7 @@ func TestValidateTemplates_DuplicateID(t *testing.T) {
 func TestValidateTemplates_UnknownWaitFor(t *testing.T) {
 	err := validateTemplates([]StepTemplate{
 		{ID: "a", Label: "a", Build: fakeBuild("a", nil)},
-		{ID: "b", Label: "b", WaitFor: "nonexistent", Build: fakeBuild("b", nil)},
+		{ID: "b", Label: "b", WaitFor: []string{"nonexistent"}, Build: fakeBuild("b", nil)},
 	})
 	if err == nil {
 		t.Fatal("expected error for unknown WaitFor")
@@ -412,17 +427,41 @@ func TestValidateTemplates_UnknownWaitFor(t *testing.T) {
 func TestValidateTemplates_ValidWaitFor(t *testing.T) {
 	err := validateTemplates([]StepTemplate{
 		{ID: "a", Label: "a", Build: fakeBuild("a", nil)},
-		{ID: "b", Label: "b", WaitFor: "a", Build: fakeBuild("b", nil)},
+		{ID: "b", Label: "b", WaitFor: []string{"a"}, Build: fakeBuild("b", nil)},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
+func TestValidateTemplates_MultipleWaitFor_AllValid(t *testing.T) {
+	err := validateTemplates([]StepTemplate{
+		{ID: "a", Label: "a", Build: fakeBuild("a", nil)},
+		{ID: "b", Label: "b", Build: fakeBuild("b", nil)},
+		{ID: "c", Label: "c", WaitFor: []string{"a", "b"}, Build: fakeBuild("c", nil)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for valid multi-dep WaitFor: %v", err)
+	}
+}
+
+func TestValidateTemplates_MultipleWaitFor_OneInvalid(t *testing.T) {
+	err := validateTemplates([]StepTemplate{
+		{ID: "a", Label: "a", Build: fakeBuild("a", nil)},
+		{ID: "b", Label: "b", WaitFor: []string{"a", "nonexistent"}, Build: fakeBuild("b", nil)},
+	})
+	if err == nil {
+		t.Fatal("expected error when one dep in WaitFor list is unknown")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Fatalf("error should name the unknown dep, got: %v", err)
+	}
+}
+
 func TestValidateTemplates_WaitForSkippedWithoutIDs(t *testing.T) {
 	// When no templates have IDs, WaitFor validation is skipped.
 	err := validateTemplates([]StepTemplate{
-		{Label: "a", WaitFor: "unknown", Build: fakeBuild("a", nil)},
+		{Label: "a", WaitFor: []string{"unknown"}, Build: fakeBuild("a", nil)},
 	})
 	if err != nil {
 		t.Fatalf("should not error when IDs are not set: %v", err)

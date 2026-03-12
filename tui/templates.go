@@ -40,7 +40,7 @@ func KubectlTemplate() StepTemplate {
 		ID:           "kubectl",
 		Panel:        PanelTopLeft,
 		Label:        "kubectl",
-		WaitFor:      "minikube",
+		WaitFor:      []string{"minikube"},
 		AutoActivate: true,
 		Hidden:       true,
 		OnReady:      func(sp string) { _ = MarkActive(sp) },
@@ -71,7 +71,7 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 			}
 			return "Skaffold (" + mode + ")"
 		},
-		WaitFor: "minikube",
+		WaitFor: []string{"minikube"},
 		Fields: []FieldSpec{
 			{ID: "components", Label: "Components", Kind: FieldKindSystemSelect, SystemsFunc: systemsfunc},
 			{ID: "mode", Label: "Mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "run", "debug"), Default: 0},

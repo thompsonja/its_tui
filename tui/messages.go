@@ -21,6 +21,10 @@ type (
 	// and triggers AutoActivate panel switching if configured.
 	stepActivateMsg struct{ id string }
 
+	// stepDepReadyMsg signals that one dependency of a pending step has
+	// completed. The waiting label is updated to cross off the finished dep.
+	stepDepReadyMsg struct{ id, dep string }
+
 	// instanceStoppedMsg signals that full instance teardown is complete.
 	instanceStoppedMsg struct{}
 

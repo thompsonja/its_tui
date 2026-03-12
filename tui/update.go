@@ -182,6 +182,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepDoneMsg:
 		m.finishStep(msg.id, msg.ok, msg.label)
 
+	case stepDepReadyMsg:
+		m.depReady(msg.id, msg.dep)
+
 	case stepActivateMsg:
 		if s, ok := m.steps[msg.id]; ok {
 			s.pending = false

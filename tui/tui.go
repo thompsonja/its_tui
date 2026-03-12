@@ -67,9 +67,8 @@ type StepDef struct {
 	// If empty, the step's ID is used (capitalized).
 	Label string
 
-	// WaitFor is the ID of a step that must complete before this one starts.
-	// An empty string means "start immediately".
-	WaitFor string
+	// WaitFor is a list of IDs of steps that must be ready before this one starts.
+	WaitFor []string
 
 	// AutoActivate, when true, switches the panel view to this step when it is
 	// activated (i.e. when its WaitFor dependency completes).
@@ -175,8 +174,8 @@ type StepTemplate struct {
 	// LabelFunc, if set, overrides Label using the final wizard values.
 	LabelFunc func(WizardValues) string
 
-	// WaitFor is the ID of a step that must be ready before this one starts.
-	WaitFor string
+	// WaitFor is a list of IDs of steps that must be ready before this one starts.
+	WaitFor []string
 
 	// AutoActivate switches the panel view to this step when activated.
 	AutoActivate bool
@@ -285,8 +284,10 @@ func validateTemplates(steps []StepTemplate) error {
 	// Validate WaitFor references only when every template has an ID registered.
 	if len(steps) > 0 && len(knownIDs) == len(steps) {
 		for _, t := range steps {
-			if t.WaitFor != "" && !knownIDs[t.WaitFor] {
-				return fmt.Errorf("template %q WaitFor=%q: no template with that ID", t.Label, t.WaitFor)
+			for _, dep := range t.WaitFor {
+				if !knownIDs[dep] {
+					return fmt.Errorf("template %q WaitFor=%q: no template with that ID", t.Label, dep)
+				}
 			}
 		}
 	}

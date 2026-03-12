@@ -106,8 +106,8 @@ type StepTemplate struct {
     // LabelFunc overrides Label using the final wizard values.
     LabelFunc func(WizardValues) string
 
-    // WaitFor is the ID of a step that must be ready before this one starts.
-    WaitFor string
+    // WaitFor is a list of IDs of steps that must be ready before this one starts.
+    WaitFor []string
 
     // AutoActivate switches the panel view to this step when it is activated.
     AutoActivate bool
@@ -340,7 +340,7 @@ minikube log view, and calls `tui.MarkActive` when ready. Routes output to `Pane
 
 ```go
 tui.KubectlTemplate()
-// WaitFor: "minikube", AutoActivate: true, Hidden: true
+// WaitFor: []string{"minikube"}, AutoActivate: true, Hidden: true
 ```
 
 ### `SkaffoldTemplate(generate, systemsfunc)`
@@ -421,9 +421,9 @@ Use `ID` and `WaitFor` to sequence steps. The dependent step starts only after i
 Steps: []tui.StepTemplate{
     {ID: "infra",  Label: "Infrastructure", Panel: tui.PanelTopLeft,  Build: buildInfra},
     {ID: "app",    Label: "Application",    Panel: tui.PanelTopRight,
-        WaitFor: "infra", Build: buildApp},
+        WaitFor: []string{"infra"}, Build: buildApp},
     {ID: "worker", Label: "Worker",         Panel: tui.PanelBottomRight,
-        WaitFor: "infra", Build: buildWorker},
+        WaitFor: []string{"infra"}, Build: buildWorker},
 },
 ```
 

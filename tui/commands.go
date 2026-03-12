@@ -3,10 +3,11 @@ package tui
 import (
 	"context"
 	"fmt"
-	"github.com/thompsonja/its_tui/step"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/thompsonja/its_tui/step"
 )
 
 // copyToClipboard writes text to the system clipboard by piping to the first
@@ -535,10 +536,10 @@ func (m *model) executeStart(defs []StepDef) {
 			continue
 		}
 		label := def.effectiveLabel()
-		if def.WaitFor == "" {
+		if len(def.WaitFor) == 0 {
 			m.startStep(def.Step.ID(), label)
 		} else {
-			m.startPendingStep(def.Step.ID(), label+" (waiting for "+def.WaitFor+")")
+			m.startPendingStep(def.Step.ID(), label, def.WaitFor)
 		}
 	}
 
@@ -547,11 +548,27 @@ func (m *model) executeStart(defs []StepDef) {
 		id := def.Step.ID()
 		stepCtx := m.stepCtxs[id].ctx
 		go func() {
-			// Wait for dependency if any.
-			if def.WaitFor != "" {
-				if ch, ok := ready[def.WaitFor]; ok {
+			// Wait for all dependencies in parallel, crossing each off as it completes.
+			if len(def.WaitFor) > 0 {
+				remaining := make(chan struct{}, len(def.WaitFor))
+				for _, dep := range def.WaitFor {
+					dep := dep
+					go func() {
+						if ch, ok := ready[dep]; ok {
+							select {
+							case <-ch:
+								prog.Send(stepDepReadyMsg{id: id, dep: dep})
+								remaining <- struct{}{}
+							case <-instanceCtx.Done():
+							}
+						} else {
+							remaining <- struct{}{}
+						}
+					}()
+				}
+				for range def.WaitFor {
 					select {
-					case <-ch:
+					case <-remaining:
 					case <-instanceCtx.Done():
 						return
 					}
