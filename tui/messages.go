@@ -25,6 +25,10 @@ type (
 	// completed. The waiting label is updated to cross off the finished dep.
 	stepDepReadyMsg struct{ id, dep string }
 
+	// stepDepFailedMsg signals that a dependency of a step has failed.
+	// The dependent step should be marked as skipped.
+	stepDepFailedMsg struct{ id, failedDep string }
+
 	// instanceStoppedMsg signals that full instance teardown is complete.
 	instanceStoppedMsg struct{}
 

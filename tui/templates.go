@@ -27,8 +27,8 @@ func MinikubeTemplate(args ...string) StepTemplate {
 }
 
 // KubectlTemplate returns a StepTemplate for the kubectl pod watcher.
-// It has no wizard fields: it starts automatically after minikube is ready,
-// auto-activates its panel, and calls MarkActive when ready.
+// It has no wizard fields: it starts automatically after minikube is ready
+// and auto-activates its panel.
 func KubectlTemplate() StepTemplate {
 	return StepTemplate{
 		ID:           "kubectl",
@@ -37,7 +37,6 @@ func KubectlTemplate() StepTemplate {
 		WaitFor:      []string{"minikube"},
 		AutoActivate: true,
 		Hidden:       true,
-		OnReady:      func(sp string) { _ = MarkActive(sp) },
 		Build:        func(v WizardValues) (Step, error) { return &KubectlStep{}, nil },
 	}
 }

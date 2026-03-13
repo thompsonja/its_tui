@@ -18,6 +18,8 @@ type (
 	ComponentsFile = config.ComponentsFile
 	System         = config.System
 	Component      = config.Component
+	StepStatus     = config.StepStatus
+	StepState      = config.StepState
 
 	MFECommand = step.MFECommand
 	Step       = step.Step
@@ -42,6 +44,7 @@ var (
 	SavePorts            = config.SavePorts
 	SaveTheme            = config.SaveTheme
 	AppendCommandHistory = config.AppendCommandHistory
+	UpdateStepState      = config.UpdateStepState
 	DefaultStatePath     = config.DefaultStatePath
 )
 

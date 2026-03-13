@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -184,6 +186,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case stepDepReadyMsg:
 		m.depReady(msg.id, msg.dep)
+
+	case stepDepFailedMsg:
+		sp := m.statePath
+		m.printLine(fmt.Sprintf("  ⚠ warning: %s dependency %s failed, skipping", msg.id, msg.failedDep))
+		_ = UpdateStepState(sp, msg.id, config.StepStatusSkipped, fmt.Errorf("dependency %s failed", msg.failedDep))
+		m.finishStep(msg.id, false, msg.id+" skipped (dependency failed)")
 
 	case stepActivateMsg:
 		if s, ok := m.steps[msg.id]; ok {

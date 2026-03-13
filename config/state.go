@@ -20,6 +20,26 @@ type State struct {
 	Instance       *InstanceState `json:"instance,omitempty"`
 }
 
+// StepStatus represents the lifecycle state of a step.
+type StepStatus string
+
+const (
+	StepStatusPending   StepStatus = "pending"   // waiting for dependencies
+	StepStatusRunning   StepStatus = "running"   // Start() called
+	StepStatusCompleted StepStatus = "completed" // Start() returned nil
+	StepStatusFailed    StepStatus = "failed"    // Start() returned error
+	StepStatusSkipped   StepStatus = "skipped"   // dependency failed
+)
+
+// StepState tracks the execution state of a single step.
+type StepState struct {
+	ID          string     `json:"id"`
+	Status      StepStatus `json:"status"`
+	StartedAt   string     `json:"started_at,omitempty"`   // RFC3339
+	CompletedAt string     `json:"completed_at,omitempty"` // RFC3339
+	Error       string     `json:"error,omitempty"`        // error message
+}
+
 // InstanceState holds everything about the currently-running instance.
 // It is written incrementally: selections are saved at wizard submission,
 // StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
@@ -31,6 +51,7 @@ type InstanceState struct {
 	SliceValues    map[string][]string `json:"slice_values,omitempty"`
 	DebugPorts     []DebugPort         `json:"debug_ports,omitempty"`
 	ForwardedPorts []DebugPort         `json:"forwarded_ports,omitempty"`
+	StepStates     map[string]StepState `json:"step_states,omitempty"` // NEW: step state tracking
 }
 
 // DebugPort records one forwarded debug port from skaffold debug.
@@ -215,5 +236,42 @@ func SaveTheme(statePath, themeName string) error {
 		return err
 	}
 	s.Theme = themeName
+	return saveStateUnsafe(statePath, s)
+}
+
+// UpdateStepState atomically updates the status of a single step in the state file.
+// It initializes the StepStates map if needed and updates timestamps based on status transitions.
+func UpdateStepState(statePath, stepID string, status StepStatus, err error) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, loadErr := loadStateUnsafe(statePath)
+	if loadErr != nil || s.Instance == nil {
+		return loadErr
+	}
+	if s.Instance.StepStates == nil {
+		s.Instance.StepStates = make(map[string]StepState)
+	}
+
+	ss := s.Instance.StepStates[stepID]
+	ss.ID = stepID
+	ss.Status = status
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	switch status {
+	case StepStatusRunning:
+		if ss.StartedAt == "" {
+			ss.StartedAt = now
+		}
+	case StepStatusCompleted, StepStatusFailed, StepStatusSkipped:
+		if ss.CompletedAt == "" {
+			ss.CompletedAt = now
+		}
+		if err != nil {
+			ss.Error = err.Error()
+		}
+	}
+
+	s.Instance.StepStates[stepID] = ss
 	return saveStateUnsafe(statePath, s)
 }
