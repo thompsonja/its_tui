@@ -107,6 +107,10 @@ type model struct {
 	// steps tracks in-progress operations shown as spinner lines in the commands panel.
 	steps map[string]*commandStep
 
+	// activeDefs holds the built step definitions for the current instance.
+	// Used by stop command to call StopFunc with the correct step instances.
+	activeDefs []StepDef
+
 	// stepCtxs holds per-step contexts for individual step cancellation.
 	stepCtxs map[string]stepEntry
 

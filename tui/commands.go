@@ -242,21 +242,26 @@ func (m *model) dispatchCommand(line string) {
 		for i := range m.panelVPs {
 			m.panelVPs[i].SetContent("")
 		}
-		// Collect stop tasks from templates in reverse order (last-in, first-out).
+		// Collect stop tasks from active defs in reverse order (last-in, first-out).
 		type stopTask struct {
 			id    string
 			label string
-			fn    func(context.Context, string)
+			step  Step
+			fn    func(context.Context, Step, string)
 		}
 		var stopTasks []stopTask
-		for i := len(m.cfg.Steps) - 1; i >= 0; i-- {
+		for i := len(m.activeDefs) - 1; i >= 0; i-- {
+			def := m.activeDefs[i]
+			if i >= len(m.cfg.Steps) {
+				continue // Safety: activeDefs and cfg.Steps should match, but skip if not
+			}
 			tmpl := m.cfg.Steps[i]
 			if tmpl.StopFunc == nil {
 				continue
 			}
 			label := tmpl.StopLabel
 			if label == "" {
-				l := tmpl.Label
+				l := def.Label
 				if l == "" {
 					l = "step"
 				}
@@ -265,28 +270,37 @@ func (m *model) dispatchCommand(line string) {
 			stopTasks = append(stopTasks, stopTask{
 				id:    fmt.Sprintf("stop-%d", i),
 				label: label,
+				step:  def.Step,
 				fn:    tmpl.StopFunc,
 			})
 		}
-		m.startStep("mfe-stop", "stopping MFE")
+		// Check if MFE is running before adding it to the stop list.
+		var mfePGID int
+		if state, err := LoadState(sp); err == nil && state.Instance != nil {
+			mfePGID = state.Instance.MFEPGID
+		}
+		if mfePGID > 0 {
+			m.startStep("mfe-stop", "stopping MFE")
+		}
 		for _, t := range stopTasks {
 			m.startStep(t.id, t.label)
 		}
 		go func() {
 			prog.Send(cmdActiveMsg(+1))
-			// Kill MFE process group (state-based; runs before template StopFuncs).
-			if state, err := LoadState(sp); err == nil && state.Instance != nil {
-				step.KillProcessGroup(state.Instance.MFEPGID)
+			// Kill MFE process group if running.
+			if mfePGID > 0 {
+				step.KillProcessGroup(mfePGID)
+				prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
 			}
-			prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
 			// Run template stop functions in reverse template order.
 			for _, t := range stopTasks {
-				t.fn(context.Background(), name)
+				t.fn(context.Background(), t.step, name)
 				prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
 			}
 			prog.Send(cmdActiveMsg(-1))
 			_ = MarkInactive(sp)
 			prog.Send(instanceStoppedMsg{})
+			prog.Send(clearActiveDefsMsg{})
 		}()
 
 	case "restart":
@@ -492,6 +506,7 @@ func (m *model) executeStartFromWizard() {
 	}()
 
 	m.switchToInstance(name)
+	m.activeDefs = defs // Store for use by stop command
 	m.registerPipeline(defs)
 	m.fullscreenTarget = 0
 

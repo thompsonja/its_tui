@@ -207,6 +207,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceStoppedMsg:
 		m.fullscreenTarget = 1
 
+	case clearActiveDefsMsg:
+		m.activeDefs = nil
+
 	// ── Key handling ─────────────────────────────────────────────────────────
 
 	case tea.KeyMsg:

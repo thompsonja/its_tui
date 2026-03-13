@@ -10,8 +10,9 @@ import (
 
 // MinikubeStep manages a minikube cluster: start and teardown via `minikube delete`.
 type MinikubeStep struct {
-	CPU string
-	RAM string
+	CPU  string
+	RAM  string
+	Args []string
 }
 
 func (s *MinikubeStep) ID() string                 { return "minikube" }
@@ -26,7 +27,9 @@ func (s *MinikubeStep) Start(ctx context.Context, instanceName string) error {
 	}
 	defer lf.Close()
 
-	cmd := exec.CommandContext(ctx, "minikube", "start", "--cpus", s.CPU, "--memory", s.RAM)
+	args := []string{"start", "--cpus", s.CPU, "--memory", s.RAM}
+	args = append(args, s.Args...)
+	cmd := exec.CommandContext(ctx, "minikube", args...)
 	cmd.Stdout = lf
 	cmd.Stderr = lf
 	if err := cmd.Run(); err != nil {

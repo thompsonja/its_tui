@@ -28,6 +28,9 @@ type (
 	// instanceStoppedMsg signals that full instance teardown is complete.
 	instanceStoppedMsg struct{}
 
+	// clearActiveDefsMsg clears the stored active step definitions.
+	clearActiveDefsMsg struct{}
+
 	// cmdActiveMsg adjusts the count of running background commands.
 	// Send +1 when a command starts, -1 when it finishes.
 	cmdActiveMsg int

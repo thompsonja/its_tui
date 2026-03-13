@@ -5,14 +5,17 @@ import "context"
 // MinikubeTemplate returns a StepTemplate for starting a minikube cluster.
 // It contributes CPU and RAM selector fields to the wizard, and provides a
 // StopFunc that runs minikube delete during the stop command.
-func MinikubeTemplate() StepTemplate {
+// Additional args can be passed to minikube start command via the args parameter.
+func MinikubeTemplate(args ...string) StepTemplate {
 	return StepTemplate{
 		ID:        "minikube",
 		Panel:     PanelTopLeft,
 		Label:     "Minikube",
 		StopLabel: "deleting cluster",
-		StopFunc: func(ctx context.Context, name string) {
-			_ = (&MinikubeStep{}).Stop(ctx, name)
+		StopFunc: func(ctx context.Context, step Step, name string) {
+			if s, ok := step.(*MinikubeStep); ok {
+				_ = s.Stop(ctx, name)
+			}
 		},
 		Fields: []FieldSpec{
 			{ID: "cpu", Label: "CPU", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4", "8", "16"), Default: 1},
@@ -27,7 +30,7 @@ func MinikubeTemplate() StepTemplate {
 			if ram == "" {
 				ram = "4g"
 			}
-			return &MinikubeStep{CPU: cpu, RAM: ram}, nil
+			return &MinikubeStep{CPU: cpu, RAM: ram, Args: args}, nil
 		},
 	}
 }

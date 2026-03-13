@@ -322,14 +322,18 @@ vals := tui.NewWizardValues(
 
 ## Built-in Templates
 
-### `MinikubeTemplate()`
+### `MinikubeTemplate(args ...string)`
 
 Starts a minikube cluster. Contributes `cpu` (Select: 2/4/8/16, default 4) and `ram` (Select:
 2g/4g/8g/16g, default 4g) wizard fields. Provides a `StopFunc` that runs `minikube delete` on
 stop. Routes output to `PanelTopLeft`.
 
+Optional `args` are passed to the `minikube start` command (e.g., driver selection, extra flags).
+
 ```go
 tui.MinikubeTemplate()
+tui.MinikubeTemplate("--driver=docker")
+tui.MinikubeTemplate("--driver=docker", "--kubernetes-version=v1.28.0")
 ```
 
 ### `KubectlTemplate()`

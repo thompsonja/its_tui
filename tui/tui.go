@@ -193,7 +193,8 @@ type StepTemplate struct {
 
 	// StopFunc, if set, is called during the stop command to clean up this
 	// step's resources. Steps are stopped in reverse template order.
-	StopFunc func(ctx context.Context, instanceName string)
+	// The step parameter is the built Step instance from this template's Build function.
+	StopFunc func(ctx context.Context, step Step, instanceName string)
 
 	// StopLabel is shown in the commands panel while StopFunc runs.
 	// Defaults to "stopping <Label>" if empty.
@@ -348,6 +349,7 @@ func Run(cfg Config) error {
 		m.fullscreenProgress = 0
 		m.fullscreenTarget = 0
 		restoreDefs = m.buildPipelineFromState(restoreName, state.Instance)
+		m.activeDefs = restoreDefs // Store for use by stop command
 		m.registerPipeline(restoreDefs)
 		for _, dp := range state.Instance.ForwardedPorts {
 			m.fwdPorts = append(m.fwdPorts, step.DebugPortMsg{
