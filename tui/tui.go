@@ -193,15 +193,6 @@ type StepTemplate struct {
 	// Build constructs the Step from the collected wizard values.
 	// Returning (nil, nil) skips this step entirely.
 	Build func(WizardValues) (Step, error)
-
-	// StopFunc, if set, is called during the stop command to clean up this
-	// step's resources. Steps are stopped in reverse template order.
-	// The step parameter is the built Step instance from this template's Build function.
-	StopFunc func(ctx context.Context, step Step, instanceName string)
-
-	// StopLabel is shown in the commands panel while StopFunc runs.
-	// Defaults to "stopping <Label>" if empty.
-	StopLabel string
 }
 
 // ── Test templates ────────────────────────────────────────────────────────────

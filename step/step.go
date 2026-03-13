@@ -33,6 +33,10 @@ type Step interface {
 	// Start launches the step and blocks until it is running/ready or fails.
 	// ctx is cancelled when the instance is stopped or switched.
 	Start(ctx context.Context, instanceName string) error
+
+	// Stop performs cleanup when the instance is stopped.
+	// Return nil if no cleanup is needed.
+	Stop(ctx context.Context, instanceName string) error
 }
 
 // WatchStep tails the step's log file and forwards each line via Send.

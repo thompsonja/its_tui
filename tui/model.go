@@ -108,7 +108,7 @@ type model struct {
 	steps map[string]*commandStep
 
 	// activeDefs holds the built step definitions for the current instance.
-	// Used by stop command to call StopFunc with the correct step instances.
+	// Used by stop command to call each step's Stop() method.
 	activeDefs []StepDef
 
 	// stepCtxs holds per-step contexts for individual step cancellation.

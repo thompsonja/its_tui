@@ -19,6 +19,7 @@ type fakeStep struct {
 func (f *fakeStep) ID() string                                   { return f.id }
 func (f *fakeStep) LogPath(name string) string                   { return f.logPath }
 func (f *fakeStep) Start(ctx context.Context, name string) error { return f.startErr }
+func (f *fakeStep) Stop(ctx context.Context, name string) error  { return nil }
 
 // fakeBuild returns a Build function that always returns a fakeStep with the
 // given ID, or the given error.
@@ -563,37 +564,6 @@ func TestNewStartWizard_EmptyInitialLeavesDefaults(t *testing.T) {
 	}
 }
 
-// ── StopFunc ──────────────────────────────────────────────────────────────────
-
-func TestMinikubeTemplate_HasStopFunc(t *testing.T) {
-	if MinikubeTemplate().StopFunc == nil {
-		t.Fatal("MinikubeTemplate should provide a StopFunc")
-	}
-}
-
-func TestMinikubeTemplate_HasStopLabel(t *testing.T) {
-	if MinikubeTemplate().StopLabel == "" {
-		t.Fatal("MinikubeTemplate should provide a non-empty StopLabel")
-	}
-}
-
-func TestKubectlTemplate_NoStopFunc(t *testing.T) {
-	if KubectlTemplate().StopFunc != nil {
-		t.Fatal("KubectlTemplate should not have a StopFunc")
-	}
-}
-
-func TestSkaffoldTemplate_NoStopFunc(t *testing.T) {
-	if SkaffoldTemplate(nil, nil).StopFunc != nil {
-		t.Fatal("SkaffoldTemplate should not have a StopFunc (cancelled via context)")
-	}
-}
-
-func TestMFETemplate_NoStopFunc(t *testing.T) {
-	if MFETemplate(nil, nil).StopFunc != nil {
-		t.Fatal("MFETemplate should not have a StopFunc (killed via PGID)")
-	}
-}
 
 // ── reEvalDynamicFields ───────────────────────────────────────────────────────
 
@@ -763,5 +733,128 @@ func TestReEvalDynamicFields_OptionsFunc_ClearsSingleValueIfGone(t *testing.T) {
 
 	if wiz.states[1].singleValue != "" {
 		t.Fatalf("expected singleValue to be cleared, got %q", wiz.states[1].singleValue)
+	}
+}
+
+// ── topoSortSteps ────────────────────────────────────────────────────────
+
+func TestTopoSortSteps_Empty(t *testing.T) {
+	result := topoSortSteps(nil)
+	if len(result) != 0 {
+		t.Fatalf("expected empty result for nil input, got %d steps", len(result))
+	}
+}
+
+func TestTopoSortSteps_NoDependencies(t *testing.T) {
+	defs := []StepDef{
+		{Step: &fakeStep{id: "a"}},
+		{Step: &fakeStep{id: "b"}},
+		{Step: &fakeStep{id: "c"}},
+	}
+	result := topoSortSteps(defs)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(result))
+	}
+	// With no dependencies, original order should be preserved
+	if result[0].Step.ID() != "a" || result[1].Step.ID() != "b" || result[2].Step.ID() != "c" {
+		t.Fatalf("expected original order [a, b, c], got [%s, %s, %s]",
+			result[0].Step.ID(), result[1].Step.ID(), result[2].Step.ID())
+	}
+}
+
+func TestTopoSortSteps_LinearChain(t *testing.T) {
+	// c depends on b, b depends on a
+	defs := []StepDef{
+		{Step: &fakeStep{id: "c"}, WaitFor: []string{"b"}},
+		{Step: &fakeStep{id: "b"}, WaitFor: []string{"a"}},
+		{Step: &fakeStep{id: "a"}},
+	}
+	result := topoSortSteps(defs)
+	if len(result) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(result))
+	}
+	// Should be sorted as a, b, c
+	if result[0].Step.ID() != "a" || result[1].Step.ID() != "b" || result[2].Step.ID() != "c" {
+		t.Fatalf("expected [a, b, c], got [%s, %s, %s]",
+			result[0].Step.ID(), result[1].Step.ID(), result[2].Step.ID())
+	}
+}
+
+func TestTopoSortSteps_Diamond(t *testing.T) {
+	// d depends on b and c, b and c depend on a
+	defs := []StepDef{
+		{Step: &fakeStep{id: "d"}, WaitFor: []string{"b", "c"}},
+		{Step: &fakeStep{id: "c"}, WaitFor: []string{"a"}},
+		{Step: &fakeStep{id: "b"}, WaitFor: []string{"a"}},
+		{Step: &fakeStep{id: "a"}},
+	}
+	result := topoSortSteps(defs)
+	if len(result) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(result))
+	}
+	// a must come first
+	if result[0].Step.ID() != "a" {
+		t.Fatalf("expected 'a' first, got %s", result[0].Step.ID())
+	}
+	// d must come last
+	if result[3].Step.ID() != "d" {
+		t.Fatalf("expected 'd' last, got %s", result[3].Step.ID())
+	}
+	// b and c can be in either order (both depend only on a)
+	ids := map[string]bool{result[1].Step.ID(): true, result[2].Step.ID(): true}
+	if !ids["b"] || !ids["c"] {
+		t.Fatalf("expected b and c in middle positions, got [%s, %s]",
+			result[1].Step.ID(), result[2].Step.ID())
+	}
+}
+
+func TestTopoSortSteps_MultipleDependencies(t *testing.T) {
+	// kubectl depends on minikube, skaffold depends on minikube, mfe depends on skaffold
+	defs := []StepDef{
+		{Step: &fakeStep{id: "mfe"}, WaitFor: []string{"skaffold"}},
+		{Step: &fakeStep{id: "skaffold"}, WaitFor: []string{"minikube"}},
+		{Step: &fakeStep{id: "kubectl"}, WaitFor: []string{"minikube"}},
+		{Step: &fakeStep{id: "minikube"}},
+	}
+	result := topoSortSteps(defs)
+	if len(result) != 4 {
+		t.Fatalf("expected 4 steps, got %d", len(result))
+	}
+	// Build position map for easier testing
+	pos := make(map[string]int)
+	for i, def := range result {
+		pos[def.Step.ID()] = i
+	}
+	// Verify minikube comes before kubectl and skaffold
+	if pos["minikube"] >= pos["kubectl"] {
+		t.Fatalf("minikube should come before kubectl")
+	}
+	if pos["minikube"] >= pos["skaffold"] {
+		t.Fatalf("minikube should come before skaffold")
+	}
+	// Verify skaffold comes before mfe
+	if pos["skaffold"] >= pos["mfe"] {
+		t.Fatalf("skaffold should come before mfe")
+	}
+}
+
+func TestTopoSortSteps_NonExistentDependency(t *testing.T) {
+	// b depends on "missing" which doesn't exist
+	defs := []StepDef{
+		{Step: &fakeStep{id: "b"}, WaitFor: []string{"missing"}},
+		{Step: &fakeStep{id: "a"}},
+	}
+	result := topoSortSteps(defs)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(result))
+	}
+	// Non-existent dependencies should be ignored, so b has no real dependencies
+	// Both should appear in result
+	ids := make(map[string]bool)
+	for _, def := range result {
+		ids[def.Step.ID()] = true
+	}
+	if !ids["a"] || !ids["b"] {
+		t.Fatalf("expected both a and b in result")
 	}
 }

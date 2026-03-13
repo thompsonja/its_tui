@@ -123,14 +123,6 @@ type StepTemplate struct {
 
     // Build constructs the Step. Returning (nil, nil) skips the step entirely.
     Build func(WizardValues) (Step, error)
-
-    // StopFunc is called during `stop` to clean up this step's resources.
-    // Steps are stopped in reverse template order.
-    StopFunc func(ctx context.Context, instanceName string)
-
-    // StopLabel is shown in the commands panel while StopFunc runs.
-    // Defaults to "stopping <Label>".
-    StopLabel string
 }
 ```
 
@@ -150,6 +142,10 @@ type Step interface {
     // Start the process. Block until it is running/ready or has failed.
     // ctx is cancelled when the instance is stopped or restarted.
     Start(ctx context.Context, instanceName string) error
+
+    // Stop performs cleanup when the instance is stopped.
+    // Return nil if no cleanup is needed.
+    Stop(ctx context.Context, instanceName string) error
 }
 ```
 
@@ -176,6 +172,9 @@ func (s *HealthStep) Start(ctx context.Context, name string) error {
         }
     }()
     return nil
+}
+func (s *HealthStep) Stop(ctx context.Context, name string) error {
+    return nil // no cleanup needed
 }
 ```
 
@@ -326,8 +325,8 @@ vals := tui.NewWizardValues(
 ### `MinikubeTemplate(args ...string)`
 
 Starts a minikube cluster. Contributes `cpu` (Select: 2/4/8/16, default 4) and `ram` (Select:
-2g/4g/8g/16g, default 4g) wizard fields. Provides a `StopFunc` that runs `minikube delete` on
-stop. Routes output to `PanelTopLeft`.
+2g/4g/8g/16g, default 4g) wizard fields. Runs `minikube delete` via `Stop()` when the instance
+is stopped. Routes output to `PanelTopLeft`.
 
 Optional `args` are passed to the `minikube start` command (e.g., driver selection, extra flags).
 
@@ -531,7 +530,7 @@ The Commands panel accepts typed commands:
 | Command              | Description |
 |----------------------|-------------|
 | `start`              | Open the configuration wizard; starts the pipeline on confirm |
-| `stop`               | Cancel all running steps, kill MFE process group, run StopFuncs in reverse order |
+| `stop`               | Cancel all running steps and call each step's `Stop()` method in reverse order |
 | `restart <step-id>`  | Cancel and re-launch a single step by ID |
 | `logs`               | Print the log file path for each running step |
 | `test [label]`       | Run a test suite (label required when multiple suites are configured) |

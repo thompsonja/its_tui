@@ -247,31 +247,18 @@ func (m *model) dispatchCommand(line string) {
 			id    string
 			label string
 			step  Step
-			fn    func(context.Context, Step, string)
 		}
 		var stopTasks []stopTask
 		for i := len(m.activeDefs) - 1; i >= 0; i-- {
 			def := m.activeDefs[i]
-			if i >= len(m.cfg.Steps) {
-				continue // Safety: activeDefs and cfg.Steps should match, but skip if not
-			}
-			tmpl := m.cfg.Steps[i]
-			if tmpl.StopFunc == nil {
-				continue
-			}
-			label := tmpl.StopLabel
-			if label == "" {
-				l := def.Label
-				if l == "" {
-					l = "step"
-				}
-				label = "stopping " + l
+			label := "stopping " + def.Label
+			if def.Label == "" {
+				label = "stopping step"
 			}
 			stopTasks = append(stopTasks, stopTask{
 				id:    fmt.Sprintf("stop-%d", i),
 				label: label,
 				step:  def.Step,
-				fn:    tmpl.StopFunc,
 			})
 		}
 		// Check if MFE is running before adding it to the stop list.
@@ -292,9 +279,9 @@ func (m *model) dispatchCommand(line string) {
 				step.KillProcessGroup(mfePGID)
 				prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
 			}
-			// Run template stop functions in reverse template order.
+			// Stop steps in reverse order.
 			for _, t := range stopTasks {
-				t.fn(context.Background(), t.step, name)
+				_ = t.step.Stop(context.Background(), name)
 				prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
 			}
 			prog.Send(cmdActiveMsg(-1))
@@ -533,6 +520,81 @@ func (m *model) executeStartFromWizard() {
 	}
 }
 
+// topoSortSteps returns a topologically sorted copy of defs.
+// Steps with no dependencies come first, followed by steps that depend on them.
+// Steps at the same dependency level maintain their original relative order.
+// If there's a cycle, returns the original order.
+func topoSortSteps(defs []StepDef) []StepDef {
+	if len(defs) == 0 {
+		return defs
+	}
+
+	// Build dependency graph and index mapping
+	graph := make(map[string][]string)   // id -> list of ids that depend on it
+	inDegree := make(map[string]int)     // id -> count of unresolved dependencies
+	idToIdx := make(map[string]int)      // id -> original index in defs
+	allIDs := make(map[string]bool)      // set of all step IDs
+
+	// First pass: collect all IDs
+	for _, def := range defs {
+		allIDs[def.Step.ID()] = true
+	}
+
+	// Second pass: build graph
+	for i, def := range defs {
+		id := def.Step.ID()
+		idToIdx[id] = i
+		if _, ok := inDegree[id]; !ok {
+			inDegree[id] = 0
+		}
+		for _, dep := range def.WaitFor {
+			// Only count dependencies that exist in this step set
+			if allIDs[dep] {
+				graph[dep] = append(graph[dep], id)
+				inDegree[id]++
+			}
+		}
+	}
+
+	// Find all nodes with no dependencies, preserving original order
+	var queue []string
+	for _, def := range defs {
+		id := def.Step.ID()
+		if inDegree[id] == 0 {
+			queue = append(queue, id)
+		}
+	}
+
+	// Kahn's algorithm for topological sort
+	var sorted []string
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		sorted = append(sorted, id)
+
+		// Reduce in-degree for all dependents
+		for _, dependent := range graph[id] {
+			inDegree[dependent]--
+			if inDegree[dependent] == 0 {
+				queue = append(queue, dependent)
+			}
+		}
+	}
+
+	// If cycle detected (not all nodes processed), return original order
+	if len(sorted) != len(defs) {
+		return defs
+	}
+
+	// Build sorted defs slice
+	result := make([]StepDef, len(defs))
+	for i, id := range sorted {
+		result[i] = defs[idToIdx[id]]
+	}
+
+	return result
+}
+
 // executeStart launches all step processes with dependency ordering.
 // Steps with WaitFor set block until their dependency signals ready.
 func (m *model) executeStart(defs []StepDef) {
@@ -549,8 +611,9 @@ func (m *model) executeStart(defs []StepDef) {
 		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
-	// Register visible steps in the commands panel tracker.
-	for _, def := range defs {
+	// Register visible steps in the commands panel tracker in topological order.
+	sortedDefs := topoSortSteps(defs)
+	for _, def := range sortedDefs {
 		if def.Hidden {
 			continue
 		}
