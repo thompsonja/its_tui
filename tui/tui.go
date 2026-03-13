@@ -60,33 +60,26 @@ const (
 	PanelNone PanelID = -1 // no panel assignment; step runs but produces no visible output
 )
 
+// stepMetadata holds execution configuration for a step.
+type stepMetadata struct {
+	panel        PanelID
+	label        string
+	waitFor      []string
+	autoActivate bool
+	hidden       bool
+	onReady      func()
+}
+
 // StepDef wires a Step to a panel and describes its execution dependencies.
 type StepDef struct {
-	Step  Step    // the process to run
-	Panel PanelID // which content panel receives this step's output
-
-	// Label is shown in the commands panel step tracker.
-	// If empty, the step's ID is used (capitalized).
-	Label string
-
-	// WaitFor is a list of IDs of steps that must be ready before this one starts.
-	WaitFor []string
-
-	// AutoActivate, when true, switches the panel view to this step when it is
-	// activated (i.e. when its WaitFor dependency completes).
-	AutoActivate bool
-
-	// Hidden, when true, suppresses this step from the commands panel tracker.
-	Hidden bool
-
-	// OnReady is called (in a goroutine) when the step's Start returns nil.
-	OnReady func()
+	Step Step         // the process to run
+	meta stepMetadata // execution metadata
 }
 
 // effectiveLabel returns the display label for the step.
 func (d StepDef) effectiveLabel() string {
-	if d.Label != "" {
-		return d.Label
+	if d.meta.label != "" {
+		return d.meta.label
 	}
 	id := d.Step.ID()
 	if len(id) == 0 {
@@ -235,6 +228,10 @@ type Config struct {
 	// The argument is the currently running instance name (empty when stopped).
 	// Defaults to showing the instance name, or "no instance running" when empty.
 	StatusLine func(instanceName string) string
+
+	// LogDir is the root directory for log files.
+	// Defaults to "/tmp" if empty.
+	LogDir string
 }
 
 // ── Runtime globals ───────────────────────────────────────────────────────────
@@ -312,6 +309,11 @@ func Run(cfg Config) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
+	// Configure log directory (defaults to /tmp if not specified)
+	if err := config.SetLogDir(cfg.LogDir); err != nil {
+		return fmt.Errorf("invalid log directory: %w", err)
+	}
+
 	statePath := DefaultStatePath()
 	state, _ := LoadState(statePath)
 
@@ -372,7 +374,7 @@ func Run(cfg Config) error {
 	// Start background watchers now that prog/Send are wired up.
 	// Skip steps with PanelNone (no output destination).
 	for _, def := range restoreDefs {
-		if def.Panel != PanelNone {
+		if def.meta.panel != PanelNone {
 			go watchStep(instanceCtx, def, restoreName)
 			go resumeStep(instanceCtx, def, restoreName)
 		}

@@ -174,19 +174,26 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 		if tmpl.LabelFunc != nil {
 			label = tmpl.LabelFunc(values)
 		}
+		// Validate that Step.ID() matches template ID if template ID is set.
+		if tmpl.ID != "" && s.ID() != tmpl.ID {
+			return nil, fmt.Errorf("step %q: Step.ID() returned %q but template ID is %q",
+				label, s.ID(), tmpl.ID)
+		}
 		var onReady func()
 		if tmpl.OnReady != nil {
 			fn := tmpl.OnReady
 			onReady = func() { fn(sp) }
 		}
 		defs = append(defs, StepDef{
-			Step:         s,
-			Panel:        tmpl.Panel,
-			Label:        label,
-			WaitFor:      tmpl.WaitFor,
-			AutoActivate: tmpl.AutoActivate,
-			Hidden:       tmpl.Hidden,
-			OnReady:      onReady,
+			Step: s,
+			meta: stepMetadata{
+				panel:        tmpl.Panel,
+				label:        label,
+				waitFor:      tmpl.WaitFor,
+				autoActivate: tmpl.AutoActivate,
+				hidden:       tmpl.Hidden,
+				onReady:      onReady,
+			},
 		})
 	}
 	return defs, nil
@@ -251,8 +258,8 @@ func (m *model) dispatchCommand(line string) {
 		var stopTasks []stopTask
 		for i := len(m.activeDefs) - 1; i >= 0; i-- {
 			def := m.activeDefs[i]
-			label := "stopping " + def.Label
-			if def.Label == "" {
+			label := "stopping " + def.meta.label
+			if def.meta.label == "" {
 				label = "stopping step"
 			}
 			stopTasks = append(stopTasks, stopTask{
@@ -510,7 +517,7 @@ func (m *model) executeStartFromWizard() {
 	// Start watchers using the per-step contexts created by executeStart.
 	// Skip steps with PanelNone (no output destination).
 	for _, def := range defs {
-		if def.Panel == PanelNone {
+		if def.meta.panel == PanelNone {
 			continue
 		}
 		id := def.Step.ID()
@@ -547,7 +554,7 @@ func topoSortSteps(defs []StepDef) []StepDef {
 		if _, ok := inDegree[id]; !ok {
 			inDegree[id] = 0
 		}
-		for _, dep := range def.WaitFor {
+		for _, dep := range def.meta.waitFor {
 			// Only count dependencies that exist in this step set
 			if allIDs[dep] {
 				graph[dep] = append(graph[dep], id)
@@ -614,14 +621,14 @@ func (m *model) executeStart(defs []StepDef) {
 	// Register visible steps in the commands panel tracker in topological order.
 	sortedDefs := topoSortSteps(defs)
 	for _, def := range sortedDefs {
-		if def.Hidden {
+		if def.meta.hidden {
 			continue
 		}
 		label := def.effectiveLabel()
-		if len(def.WaitFor) == 0 {
+		if len(def.meta.waitFor) == 0 {
 			m.startStep(def.Step.ID(), label)
 		} else {
-			m.startPendingStep(def.Step.ID(), label, def.WaitFor)
+			m.startPendingStep(def.Step.ID(), label, def.meta.waitFor)
 		}
 	}
 
@@ -631,9 +638,9 @@ func (m *model) executeStart(defs []StepDef) {
 		stepCtx := m.stepCtxs[id].ctx
 		go func() {
 			// Wait for all dependencies in parallel, crossing each off as it completes.
-			if len(def.WaitFor) > 0 {
-				remaining := make(chan struct{}, len(def.WaitFor))
-				for _, dep := range def.WaitFor {
+			if len(def.meta.waitFor) > 0 {
+				remaining := make(chan struct{}, len(def.meta.waitFor))
+				for _, dep := range def.meta.waitFor {
 					dep := dep
 					go func() {
 						if ch, ok := ready[dep]; ok {
@@ -648,7 +655,7 @@ func (m *model) executeStart(defs []StepDef) {
 						}
 					}()
 				}
-				for range def.WaitFor {
+				for range def.meta.waitFor {
 					select {
 					case <-remaining:
 					case <-instanceCtx.Done():
@@ -661,7 +668,7 @@ func (m *model) executeStart(defs []StepDef) {
 
 			// Start the step.
 			if err := def.Step.Start(stepCtx, name); err != nil {
-				if !def.Hidden {
+				if !def.meta.hidden {
 					prog.Send(stepDoneMsg{
 						id:    id,
 						ok:    false,
@@ -675,11 +682,11 @@ func (m *model) executeStart(defs []StepDef) {
 			close(ready[id])
 
 			// Invoke the OnReady callback.
-			if def.OnReady != nil {
-				go def.OnReady()
+			if def.meta.onReady != nil {
+				go def.meta.onReady()
 			}
 
-			if !def.Hidden {
+			if !def.meta.hidden {
 				prog.Send(stepDoneMsg{
 					id:    id,
 					ok:    true,

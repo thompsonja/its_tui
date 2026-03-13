@@ -43,6 +43,7 @@ import (
 func main() {
     cfg := tui.Config{
         InstanceName: "My Service",
+        LogDir:       "./logs",  // Optional: defaults to /tmp
         Steps: []tui.StepTemplate{
             tui.MinikubeTemplate(),
             tui.KubectlTemplate(),
@@ -80,6 +81,10 @@ type Config struct {
     // instanceName is empty when no instance is running.
     // Defaults to showing instanceName, or "no instance running".
     StatusLine func(instanceName string) string
+
+    // Root directory for log files. Defaults to "/tmp" if empty.
+    // Log files are named <step>_<instanceName>.log (e.g. skaffold_My_Service.log).
+    LogDir string
 }
 ```
 
@@ -610,6 +615,7 @@ import (
 func main() {
     cfg := tui.Config{
         InstanceName: "Platform",
+        LogDir:       "./logs",
         StatusLine: func(name string) string {
             if name == "" {
                 return "no instance running — type: start"

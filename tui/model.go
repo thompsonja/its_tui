@@ -170,10 +170,10 @@ func tickCmd() tea.Cmd {
 func (m *model) registerPipeline(defs []StepDef) {
 	var pv [3]panelView
 	for _, def := range defs {
-		if def.Panel == PanelNone {
+		if def.meta.panel == PanelNone {
 			continue // Skip steps with no panel assignment
 		}
-		pid := int(def.Panel)
+		pid := int(def.meta.panel)
 		pv[pid].defs = append(pv[pid].defs, def)
 		pv[pid].bufs = append(pv[pid].bufs, nil)
 	}

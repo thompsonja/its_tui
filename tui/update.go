@@ -195,7 +195,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
 		}
 		// AutoActivate: switch the panel view to show this step.
-		if def, ok := m.findDef(msg.id); ok && def.AutoActivate {
+		if def, ok := m.findDef(msg.id); ok && def.meta.autoActivate {
 			pid, idx := m.panelAndIdx(msg.id)
 			if idx >= 0 {
 				pv := &m.panels[pid]

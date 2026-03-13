@@ -85,8 +85,8 @@ func TestBuildDefsFromTemplates_UsesLabelFunc(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if defs[0].Label != "dynamic-42" {
-		t.Fatalf("expected dynamic-42, got %q", defs[0].Label)
+	if defs[0].meta.label != "dynamic-42" {
+		t.Fatalf("expected dynamic-42, got %q", defs[0].meta.label)
 	}
 }
 
@@ -96,8 +96,8 @@ func TestBuildDefsFromTemplates_FallsBackToLabel(t *testing.T) {
 		Build: fakeBuild("s", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if defs[0].Label != "static" {
-		t.Fatalf("expected static, got %q", defs[0].Label)
+	if defs[0].meta.label != "static" {
+		t.Fatalf("expected static, got %q", defs[0].meta.label)
 	}
 }
 
@@ -108,8 +108,8 @@ func TestBuildDefsFromTemplates_WiresPanel(t *testing.T) {
 		Build: fakeBuild("x", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if defs[0].Panel != PanelTopRight {
-		t.Fatalf("expected PanelTopRight, got %d", defs[0].Panel)
+	if defs[0].meta.panel != PanelTopRight {
+		t.Fatalf("expected PanelTopRight, got %d", defs[0].meta.panel)
 	}
 }
 
@@ -120,8 +120,8 @@ func TestBuildDefsFromTemplates_WiresWaitFor(t *testing.T) {
 		Build:   fakeBuild("x", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if defs[0].WaitFor[0] != "dep" {
-		t.Fatalf("expected dep, got %q", defs[0].WaitFor)
+	if defs[0].meta.waitFor[0] != "dep" {
+		t.Fatalf("expected dep, got %q", defs[0].meta.waitFor)
 	}
 }
 
@@ -132,11 +132,11 @@ func TestBuildDefsFromTemplates_WiresMultipleWaitFor(t *testing.T) {
 		Build:   fakeBuild("x", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if len(defs[0].WaitFor) != 2 {
-		t.Fatalf("expected 2 WaitFor entries, got %d", len(defs[0].WaitFor))
+	if len(defs[0].meta.waitFor) != 2 {
+		t.Fatalf("expected 2 WaitFor entries, got %d", len(defs[0].meta.waitFor))
 	}
-	if defs[0].WaitFor[0] != "a" || defs[0].WaitFor[1] != "b" {
-		t.Fatalf("expected [a b], got %v", defs[0].WaitFor)
+	if defs[0].meta.waitFor[0] != "a" || defs[0].meta.waitFor[1] != "b" {
+		t.Fatalf("expected [a b], got %v", defs[0].meta.waitFor)
 	}
 }
 
@@ -151,7 +151,7 @@ func TestBuildDefsFromTemplates_WiresOnReady(t *testing.T) {
 		statePath: "/test/state.json",
 	}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	defs[0].OnReady()
+	defs[0].meta.onReady()
 	if got != "/test/state.json" {
 		t.Fatalf("expected statePath, got %q", got)
 	}
@@ -192,7 +192,7 @@ func TestBuildDefsFromTemplates_NilOnReadyNotWired(t *testing.T) {
 		Build:   fakeBuild("x", nil),
 	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
-	if defs[0].OnReady != nil {
+	if defs[0].meta.onReady != nil {
 		t.Fatal("OnReady should be nil when template.OnReady is nil")
 	}
 }
@@ -765,8 +765,8 @@ func TestTopoSortSteps_NoDependencies(t *testing.T) {
 func TestTopoSortSteps_LinearChain(t *testing.T) {
 	// c depends on b, b depends on a
 	defs := []StepDef{
-		{Step: &fakeStep{id: "c"}, WaitFor: []string{"b"}},
-		{Step: &fakeStep{id: "b"}, WaitFor: []string{"a"}},
+		{Step: &fakeStep{id: "c"}, meta: stepMetadata{waitFor: []string{"b"}}},
+		{Step: &fakeStep{id: "b"}, meta: stepMetadata{waitFor: []string{"a"}}},
 		{Step: &fakeStep{id: "a"}},
 	}
 	result := topoSortSteps(defs)
@@ -783,9 +783,9 @@ func TestTopoSortSteps_LinearChain(t *testing.T) {
 func TestTopoSortSteps_Diamond(t *testing.T) {
 	// d depends on b and c, b and c depend on a
 	defs := []StepDef{
-		{Step: &fakeStep{id: "d"}, WaitFor: []string{"b", "c"}},
-		{Step: &fakeStep{id: "c"}, WaitFor: []string{"a"}},
-		{Step: &fakeStep{id: "b"}, WaitFor: []string{"a"}},
+		{Step: &fakeStep{id: "d"}, meta: stepMetadata{waitFor: []string{"b", "c"}}},
+		{Step: &fakeStep{id: "c"}, meta: stepMetadata{waitFor: []string{"a"}}},
+		{Step: &fakeStep{id: "b"}, meta: stepMetadata{waitFor: []string{"a"}}},
 		{Step: &fakeStep{id: "a"}},
 	}
 	result := topoSortSteps(defs)
@@ -811,9 +811,9 @@ func TestTopoSortSteps_Diamond(t *testing.T) {
 func TestTopoSortSteps_MultipleDependencies(t *testing.T) {
 	// kubectl depends on minikube, skaffold depends on minikube, mfe depends on skaffold
 	defs := []StepDef{
-		{Step: &fakeStep{id: "mfe"}, WaitFor: []string{"skaffold"}},
-		{Step: &fakeStep{id: "skaffold"}, WaitFor: []string{"minikube"}},
-		{Step: &fakeStep{id: "kubectl"}, WaitFor: []string{"minikube"}},
+		{Step: &fakeStep{id: "mfe"}, meta: stepMetadata{waitFor: []string{"skaffold"}}},
+		{Step: &fakeStep{id: "skaffold"}, meta: stepMetadata{waitFor: []string{"minikube"}}},
+		{Step: &fakeStep{id: "kubectl"}, meta: stepMetadata{waitFor: []string{"minikube"}}},
 		{Step: &fakeStep{id: "minikube"}},
 	}
 	result := topoSortSteps(defs)
@@ -841,7 +841,7 @@ func TestTopoSortSteps_MultipleDependencies(t *testing.T) {
 func TestTopoSortSteps_NonExistentDependency(t *testing.T) {
 	// b depends on "missing" which doesn't exist
 	defs := []StepDef{
-		{Step: &fakeStep{id: "b"}, WaitFor: []string{"missing"}},
+		{Step: &fakeStep{id: "b"}, meta: stepMetadata{waitFor: []string{"missing"}}},
 		{Step: &fakeStep{id: "a"}},
 	}
 	result := topoSortSteps(defs)
