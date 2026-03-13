@@ -1,5 +1,7 @@
 package tui
 
+import "fmt"
+
 // MinikubeTemplate returns a StepTemplate for starting a minikube cluster.
 // It contributes CPU and RAM selector fields to the wizard.
 // Additional args can be passed to minikube start command via the args parameter.
@@ -68,6 +70,44 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 		Fields: []FieldSpec{
 			{ID: "components", Label: "Components", Kind: FieldKindSystemSelect, SystemsFunc: systemsfunc},
 			{ID: "mode", Label: "Mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "run", "debug"), Default: 0},
+		},
+		Commands: []CommandSpec{
+			{
+				Name: "status",
+				Help: "show skaffold deployment status",
+				Handler: func(args []string, instanceName string, values WizardValues) error {
+					if instanceName == "" {
+						prog.Send(commandLineMsg("  no instance running - use: start"))
+						return nil
+					}
+					mode := values.String("mode")
+					if mode == "" {
+						mode = "dev"
+					}
+					prog.Send(commandLineMsg(fmt.Sprintf("  skaffold running in %s mode", mode)))
+					prog.Send(commandLineMsg(fmt.Sprintf("  instance: %s", instanceName)))
+					return nil
+				},
+			},
+			{
+				Name: "info",
+				Help: "show skaffold configuration details",
+				Handler: func(args []string, instanceName string, values WizardValues) error {
+					mode := values.String("mode")
+					if mode == "" {
+						mode = "dev"
+					}
+					components := values.Strings("components")
+					prog.Send(commandLineMsg(fmt.Sprintf("  mode: %s", mode)))
+					prog.Send(commandLineMsg(fmt.Sprintf("  components: %d selected", len(components))))
+					if len(components) > 0 {
+						for _, c := range components {
+							prog.Send(commandLineMsg(fmt.Sprintf("    - %s", c)))
+						}
+					}
+					return nil
+				},
+			},
 		},
 		Build: func(v WizardValues) (Step, error) {
 			if generate == nil {

@@ -114,6 +114,10 @@ type model struct {
 	// stepCtxs holds per-step contexts for individual step cancellation.
 	stepCtxs map[string]stepEntry
 
+	// customCommands maps command names to their handlers.
+	// Built from StepTemplate.Commands during buildDefsFromTemplates.
+	customCommands map[string]CommandSpec
+
 	// searchMode indicates panel log search is active.
 	searchMode  bool
 	searchQuery string
@@ -152,6 +156,7 @@ func newModel(cfg Config) model {
 		historyIdx:         -1,
 		fullscreenProgress: 1.0,
 		fullscreenTarget:   1.0,
+		customCommands:     make(map[string]CommandSpec),
 	}
 }
 

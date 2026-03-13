@@ -153,6 +153,21 @@ func NewWizardValues(str map[string]string, strs map[string][]string) WizardValu
 
 // ── Step template ─────────────────────────────────────────────────────────────
 
+// CommandSpec describes a custom command contributed by a step template.
+type CommandSpec struct {
+	// Name is the command name as typed by users (e.g., "rebuild", "status").
+	Name string
+
+	// Help is a brief description shown in the help overlay.
+	Help string
+
+	// Handler is called when the command is invoked.
+	// - args: command-line arguments after the command name
+	// - instanceName: current running instance name (empty if no instance)
+	// - values: wizard values from the current/last instance
+	Handler func(args []string, instanceName string, values WizardValues) error
+}
+
 // StepTemplate wires a Step's pipeline placement, wizard fields, and factory
 // together. Callers register templates via Config.Steps.
 type StepTemplate struct {
@@ -185,6 +200,10 @@ type StepTemplate struct {
 	// OnReady is called (in a goroutine) when the step's Start returns nil.
 	// The statePath argument is the path to the TUI state file.
 	OnReady func(statePath string)
+
+	// Commands are optional custom commands contributed by this step.
+	// Available as soon as the step is configured in the pipeline.
+	Commands []CommandSpec
 
 	// Build constructs the Step from the collected wizard values.
 	// Returning (nil, nil) skips this step entirely.

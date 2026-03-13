@@ -189,6 +189,10 @@ func determineResumeAction(stepID string, savedState map[string]StepState) Resum
 func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 	sp := m.statePath
 	var defs []StepDef
+
+	// Clear and rebuild command registry
+	m.customCommands = make(map[string]CommandSpec)
+
 	for _, tmpl := range m.cfg.Steps {
 		s, err := tmpl.Build(values)
 		if err != nil {
@@ -210,6 +214,34 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 			return nil, fmt.Errorf("step %q: Step.ID() returned %q but template ID is %q",
 				label, s.ID(), tmpl.ID)
 		}
+
+		// Register commands from this template
+		for _, cmd := range tmpl.Commands {
+			// Validate command
+			if cmd.Name == "" {
+				return nil, fmt.Errorf("step %q: command has empty Name", label)
+			}
+			if cmd.Handler == nil {
+				return nil, fmt.Errorf("step %q: command %q has nil Handler", label, cmd.Name)
+			}
+
+			// Check for conflicts with other step commands
+			if _, exists := m.customCommands[cmd.Name]; exists {
+				return nil, fmt.Errorf("command name conflict: %q defined by multiple steps", cmd.Name)
+			}
+
+			// Check against built-in commands
+			builtins := []string{"help", "start", "stop", "restart", "logs", "test", "theme"}
+			for _, b := range builtins {
+				if b == cmd.Name {
+					return nil, fmt.Errorf("step %q: command %q conflicts with built-in command", label, cmd.Name)
+				}
+			}
+
+			// Register command
+			m.customCommands[cmd.Name] = cmd
+		}
+
 		var onReady func()
 		if tmpl.OnReady != nil {
 			fn := tmpl.OnReady
@@ -496,7 +528,7 @@ func (m *model) dispatchCommand(line string) {
 			for _, t := range presets {
 				if t.Name == name {
 					currentTheme = t
-					m.helpOverlayVP.SetContent(helpContent(m.helpOverlayVP.Width))
+					m.helpOverlayVP.SetContent(m.helpContent(m.helpOverlayVP.Width))
 					m.printLine("theme set to: " + name)
 					found = true
 					go func() { _ = SaveTheme(sp, name) }()
@@ -509,8 +541,33 @@ func (m *model) dispatchCommand(line string) {
 		}
 
 	default:
-		m.printLine("$ " + line)
-		m.printLine("unknown command: " + parts[0] + " (try: help)")
+		cmdName := parts[0]
+		args := parts[1:]
+
+		// Try custom commands
+		if cmd, ok := m.customCommands[cmdName]; ok {
+			m.printLine("$ " + line)
+
+			// Get current wizard values for the handler
+			var values WizardValues
+			if state, err := LoadState(sp); err == nil && state.Instance != nil {
+				values = wizardValuesFromState(state.Instance)
+			}
+
+			// Execute handler in goroutine (don't block UI)
+			go func() {
+				prog.Send(cmdActiveMsg(+1))
+				err := cmd.Handler(args, m.instanceName, values)
+				prog.Send(cmdActiveMsg(-1))
+
+				if err != nil {
+					prog.Send(commandLineMsg(fmt.Sprintf("  error: %v", err)))
+				}
+			}()
+		} else {
+			m.printLine("$ " + line)
+			m.printLine("unknown command: " + cmdName + " (try: help)")
+		}
 	}
 }
 

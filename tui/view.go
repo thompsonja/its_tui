@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -946,7 +947,7 @@ func horizSelector(idx int, opts []string, focused bool, hlStyle, selStyle, dimS
 
 // helpContent builds the help text, arranging sections into columns when the
 // available width allows it.
-func helpContent(width int) string {
+func (m *model) helpContent(width int) string {
 	nav := helpSection("Navigation", []helpEntry{
 		{"Tab / Shift+Tab", "cycle panels"},
 		{"↑ / k", "scroll up"},
@@ -969,12 +970,63 @@ func helpContent(width int) string {
 		{"Enter", "run command"},
 		{"Esc", "close overlay"},
 	})
+
+	// Build custom commands section if any exist
+	var customCmds string
+	if len(m.customCommands) > 0 {
+		entries := make([]helpEntry, 0, len(m.customCommands))
+
+		// Sort command names for consistent display
+		names := make([]string, 0, len(m.customCommands))
+		for name := range m.customCommands {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, name := range names {
+			cmd := m.customCommands[name]
+			helpText := cmd.Help
+			if helpText == "" {
+				helpText = "(no description)"
+			}
+			entries = append(entries, helpEntry{key: name, desc: helpText})
+		}
+
+		customCmds = helpSection("Step Commands", entries)
+	}
+
 	global := helpSection("Global", []helpEntry{
 		{"Ctrl+C", "quit"},
 	})
 
 	hs := helpTextStyle()
 
+	// Layout with custom commands
+	if customCmds != "" {
+		if width >= 96 {
+			// 3-column layout: Navigation | Commands | Step Commands + Global
+			cw := width / 3
+			right := lipgloss.JoinVertical(lipgloss.Left, customCmds, "", global)
+			return lipgloss.JoinHorizontal(lipgloss.Top,
+				hs.Width(cw).Render(nav),
+				hs.Width(cw).Render(cmds),
+				hs.Width(width-2*cw).Render(right),
+			)
+		}
+		if width >= 64 {
+			// 2-column layout: Navigation | Commands + Step Commands + Global
+			cw := width / 2
+			right := lipgloss.JoinVertical(lipgloss.Left, cmds, "", customCmds, "", global)
+			return lipgloss.JoinHorizontal(lipgloss.Top,
+				hs.Width(cw).Render(nav),
+				hs.Width(width-cw).Render(right),
+			)
+		}
+		// Single column: all sections stacked
+		return hs.Render(lipgloss.JoinVertical(lipgloss.Left, nav, "", cmds, "", customCmds, "", global))
+	}
+
+	// Original layout without custom commands
 	if width >= 96 {
 		cw := width / 3
 		return lipgloss.JoinHorizontal(lipgloss.Top,

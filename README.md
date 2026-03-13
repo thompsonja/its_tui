@@ -126,6 +126,10 @@ type StepTemplate struct {
     // statePath is the path to the TUI state file (~/.tui/state.json).
     OnReady func(statePath string)
 
+    // Commands are optional custom commands contributed by this step.
+    // Available in the REPL as soon as the step is configured.
+    Commands []CommandSpec
+
     // Build constructs the Step. Returning (nil, nil) skips the step entirely.
     Build func(WizardValues) (Step, error)
 }
@@ -528,6 +532,72 @@ cfg := tui.Config{
 }
 ```
 
+## Custom Commands
+
+Steps can contribute custom commands to the REPL. Commands are available as soon as the step is configured in the pipeline, even before the instance starts.
+
+```go
+type CommandSpec struct {
+    // Name is the command name as typed by users (e.g., "rebuild", "status").
+    Name string
+
+    // Help is a brief description shown in the help overlay.
+    Help string
+
+    // Handler is called when the command is invoked.
+    // - args: command-line arguments after the command name
+    // - instanceName: current running instance name (empty if no instance)
+    // - values: wizard values from the current/last instance
+    Handler func(args []string, instanceName string, values WizardValues) error
+}
+```
+
+Example:
+
+```go
+import "github.com/thompsonja/its_tui/step"
+
+tui.StepTemplate{
+    ID:    "skaffold",
+    Panel: tui.PanelTopRight,
+    Commands: []tui.CommandSpec{
+        {
+            Name: "status",
+            Help: "show skaffold deployment status",
+            Handler: func(args []string, instanceName string, values tui.WizardValues) error {
+                if instanceName == "" {
+                    step.Send(step.CommandMsg{Text: "  no instance running"})
+                    return nil
+                }
+                mode := values.String("mode")
+                step.Send(step.CommandMsg{Text: "  running in " + mode + " mode"})
+                return nil
+            },
+        },
+        {
+            Name: "rebuild",
+            Help: "rebuild with optional profile",
+            Handler: func(args []string, instanceName string, values tui.WizardValues) error {
+                profile := "default"
+                if len(args) > 0 {
+                    profile = args[0]
+                }
+                step.Send(step.CommandMsg{Text: "  rebuilding with " + profile + "..."})
+                // Trigger rebuild logic here
+                return nil
+            },
+        },
+    },
+    Build: buildSkaffold,
+}
+```
+
+Commands appear in the help overlay under "Step Commands" and are callable from the REPL. Command names must not conflict with built-in commands or commands from other steps.
+
+Use `step.Send(step.CommandMsg{Text: "..."})` from handlers to send output to the commands panel.
+
+The built-in `SkaffoldTemplate` includes example commands (`status` and `info`) that demonstrate the pattern.
+
 ## REPL Commands
 
 The Commands panel accepts typed commands:
@@ -541,6 +611,8 @@ The Commands panel accepts typed commands:
 | `test [label]`       | Run a test suite (label required when multiple suites are configured) |
 | `theme <name>`       | Switch color theme; persisted across sessions |
 | `help`               | Open the keyboard reference card |
+
+Steps can also contribute **custom commands** via `StepTemplate.Commands` (see [Custom Commands](#custom-commands)).
 
 Command history is navigated with `↑` / `↓` in the Commands panel.
 

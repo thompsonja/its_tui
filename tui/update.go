@@ -491,7 +491,7 @@ func (m *model) resizePanels() {
 	m.portsVP.SetContent(m.renderPortsContent())
 	m.debugVP.SetContent(m.renderDebugContent())
 	m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
-	m.helpOverlayVP.SetContent(helpContent(vpW_L))
+	m.helpOverlayVP.SetContent(m.helpContent(vpW_L))
 	m.input.Width = vpW_L
 
 	if m.wizard != nil {
