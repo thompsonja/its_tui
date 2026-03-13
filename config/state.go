@@ -5,8 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
+
+// stateMu protects concurrent access to the state file.
+// All LoadState and SaveState operations must hold this lock.
+var stateMu sync.Mutex
 
 // State tracks runtime data across TUI sessions.
 type State struct {
@@ -43,7 +48,10 @@ const maxHistoryLen = 200
 // AppendCommandHistory adds line to the persisted command history, keeping the
 // last maxHistoryLen entries.
 func AppendCommandHistory(statePath, line string) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
@@ -51,12 +59,20 @@ func AppendCommandHistory(statePath, line string) error {
 	if len(s.CommandHistory) > maxHistoryLen {
 		s.CommandHistory = s.CommandHistory[len(s.CommandHistory)-maxHistoryLen:]
 	}
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
-// LoadState reads the state JSON file.
+// LoadState reads the state JSON file with lock protection.
 // A missing file returns an empty State (not an error).
 func LoadState(path string) (State, error) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return loadStateUnsafe(path)
+}
+
+// loadStateUnsafe reads the state JSON file without acquiring the lock.
+// Caller must hold stateMu.
+func loadStateUnsafe(path string) (State, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -71,8 +87,16 @@ func LoadState(path string) (State, error) {
 	return s, nil
 }
 
-// SaveState atomically writes the state JSON file, creating parent dirs as needed.
+// SaveState atomically writes the state JSON file with lock protection, creating parent dirs as needed.
 func SaveState(path string, s State) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+	return saveStateUnsafe(path, s)
+}
+
+// saveStateUnsafe atomically writes the state JSON file without acquiring the lock.
+// Caller must hold stateMu.
+func saveStateUnsafe(path string, s State) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("creating state dir: %w", err)
 	}
@@ -90,19 +114,25 @@ func SaveState(path string, s State) error {
 // SaveInstanceState writes the instance selections to state.Instance before
 // the cluster is started. StartedAt is left empty until MarkActive is called.
 func SaveInstanceState(statePath string, inst InstanceState) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
 	s.Instance = &inst
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // MarkActive stamps state.Instance.StartedAt with the current time.
 // If state.Instance is nil (e.g. file-wizard path that skipped SaveInstanceState)
 // it creates a new InstanceState first.
 func MarkActive(statePath string) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
@@ -110,22 +140,28 @@ func MarkActive(statePath string) error {
 		s.Instance = &InstanceState{}
 	}
 	s.Instance.StartedAt = time.Now().UTC().Format(time.RFC3339)
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // MarkInactive clears the running instance from state.
 func MarkInactive(statePath string) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
 	s.Instance = nil
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // SaveMFEPGID persists the MFE process group ID into the running instance state.
 func SaveMFEPGID(statePath string, pgid int) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
@@ -133,12 +169,15 @@ func SaveMFEPGID(statePath string, pgid int) error {
 		s.Instance = &InstanceState{}
 	}
 	s.Instance.MFEPGID = pgid
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // SaveDebugPorts persists the current debug port list into the running instance state.
 func SaveDebugPorts(statePath string, ports []DebugPort) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
@@ -146,12 +185,15 @@ func SaveDebugPorts(statePath string, ports []DebugPort) error {
 		s.Instance = &InstanceState{}
 	}
 	s.Instance.DebugPorts = ports
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // SavePorts persists both forwarded service ports and debug ports into the running instance state.
 func SavePorts(statePath string, fwd, dbg []DebugPort) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
@@ -160,15 +202,18 @@ func SavePorts(statePath string, fwd, dbg []DebugPort) error {
 	}
 	s.Instance.ForwardedPorts = fwd
 	s.Instance.DebugPorts = dbg
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
 
 // SaveTheme persists the chosen theme name to the state file.
 func SaveTheme(statePath, themeName string) error {
-	s, err := LoadState(statePath)
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
 	if err != nil {
 		return err
 	}
 	s.Theme = themeName
-	return SaveState(statePath, s)
+	return saveStateUnsafe(statePath, s)
 }
