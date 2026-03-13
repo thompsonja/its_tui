@@ -521,7 +521,11 @@ func (m *model) executeStartFromWizard() {
 	m.executeStart(defs)
 
 	// Start watchers using the per-step contexts created by executeStart.
+	// Skip steps with PanelNone (no output destination).
 	for _, def := range defs {
+		if def.Panel == PanelNone {
+			continue
+		}
 		id := def.Step.ID()
 		if e, ok := m.stepCtxs[id]; ok {
 			go watchStep(e.ctx, def, name)

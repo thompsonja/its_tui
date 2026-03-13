@@ -98,6 +98,7 @@ type StepTemplate struct {
     Fields []FieldSpec
 
     // Output panel for this step's log stream.
+    // Use PanelNone for steps that run but produce no visible output.
     Panel PanelID
 
     // Label shown in the commands panel tracker.
@@ -452,6 +453,26 @@ is useful for "wizard-only" templates that contribute fields consumed by other s
     Build: func(v tui.WizardValues) (tui.Step, error) { return nil, nil },
 },
 ```
+
+## Steps Without Visible Output
+
+Use `Panel: tui.PanelNone` for steps that run a process but produce no visible output. These
+steps execute normally but their logs are not tailed and any `step.Send()` calls are ignored.
+This is useful for background services or setup tasks that don't need user visibility:
+
+```go
+{
+    ID:     "db-migrate",
+    Panel:  tui.PanelNone,  // no output shown
+    Label:  "Database Migration",
+    Build: func(v tui.WizardValues) (tui.Step, error) {
+        return &MigrateStep{DSN: v.String("dsn")}, nil
+    },
+},
+```
+
+The step will still appear in the commands panel tracker (unless `Hidden: true` is also set)
+and can use `WaitFor` dependencies, but output goes nowhere.
 
 ## Test Suites
 

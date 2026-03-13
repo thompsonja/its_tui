@@ -166,9 +166,13 @@ func tickCmd() tea.Cmd {
 }
 
 // registerPipeline assigns steps to panels and initializes panel buffers.
+// Steps with Panel == PanelNone are skipped (they run but produce no visible output).
 func (m *model) registerPipeline(defs []StepDef) {
 	var pv [3]panelView
 	for _, def := range defs {
+		if def.Panel == PanelNone {
+			continue // Skip steps with no panel assignment
+		}
 		pid := int(def.Panel)
 		pv[pid].defs = append(pv[pid].defs, def)
 		pv[pid].bufs = append(pv[pid].bufs, nil)

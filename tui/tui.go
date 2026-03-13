@@ -56,6 +56,8 @@ const (
 	PanelTopLeft     PanelID = iota // default: Minikube / kubectl
 	PanelTopRight                   // default: Skaffold
 	PanelBottomRight                // default: MFE
+
+	PanelNone PanelID = -1 // no panel assignment; step runs but produces no visible output
 )
 
 // StepDef wires a Step to a panel and describes its execution dependencies.
@@ -166,6 +168,7 @@ type StepTemplate struct {
 	Fields []FieldSpec
 
 	// Panel is the content panel this step's output is routed to.
+	// Use PanelNone for steps that run but produce no visible output.
 	Panel PanelID
 
 	// Label is shown in the commands panel step tracker.
@@ -272,7 +275,7 @@ func validateTemplates(steps []StepTemplate) error {
 			}
 			return fmt.Errorf("template %q has nil Build function", label)
 		}
-		if t.Panel < PanelTopLeft || t.Panel > PanelBottomRight {
+		if t.Panel != PanelNone && (t.Panel < PanelTopLeft || t.Panel > PanelBottomRight) {
 			return fmt.Errorf("template %q has invalid Panel %d", t.Label, int(t.Panel))
 		}
 		if t.ID != "" {
@@ -376,9 +379,12 @@ func Run(cfg Config) error {
 	step.SetSender(func(msg any) { p.Send(msg) })
 
 	// Start background watchers now that prog/Send are wired up.
+	// Skip steps with PanelNone (no output destination).
 	for _, def := range restoreDefs {
-		go watchStep(instanceCtx, def, restoreName)
-		go resumeStep(instanceCtx, def, restoreName)
+		if def.Panel != PanelNone {
+			go watchStep(instanceCtx, def, restoreName)
+			go resumeStep(instanceCtx, def, restoreName)
+		}
 	}
 
 	if _, err := p.Run(); err != nil {

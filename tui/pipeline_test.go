@@ -396,11 +396,22 @@ func TestValidateTemplates_InvalidPanel_TooHigh(t *testing.T) {
 func TestValidateTemplates_InvalidPanel_Negative(t *testing.T) {
 	err := validateTemplates([]StepTemplate{{
 		Label: "x",
-		Panel: PanelID(-1),
+		Panel: PanelID(-2),
 		Build: fakeBuild("x", nil),
 	}})
 	if err == nil {
-		t.Fatal("expected error for Panel=-1")
+		t.Fatal("expected error for Panel=-2")
+	}
+}
+
+func TestValidateTemplates_PanelNone_Valid(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		Label: "x",
+		Panel: PanelNone,
+		Build: fakeBuild("x", nil),
+	}})
+	if err != nil {
+		t.Fatalf("PanelNone should be valid: %v", err)
 	}
 }
 
