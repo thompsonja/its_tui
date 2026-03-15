@@ -22,6 +22,17 @@ type SkaffoldStep struct {
 	Path     string   // path to skaffold.yaml
 	Mode     string   // "dev", "run", or "debug"; defaults to "dev"
 	Profiles []string // optional skaffold profiles to activate (--profile flags)
+	send     func(any) // injected sender; falls back to global Send
+}
+
+// SetSender injects a message sender for testing. Falls back to the global Send.
+func (s *SkaffoldStep) SetSender(fn func(any)) { s.send = fn }
+
+func (s *SkaffoldStep) sender() func(any) {
+	if s.send != nil {
+		return s.send
+	}
+	return Send
 }
 
 func (s *SkaffoldStep) ID() string                 { return "skaffold" }
@@ -109,6 +120,7 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	// exitErr receives the process exit status. It is filled before cancelWatch
 	// is called so that when the watcher unblocks (due to the cancel) the exit
 	// status is already available for the race-free check below.
+	send := s.sender()
 	exitErr := make(chan error, 1)
 	go func() {
 		defer lf.Close()
@@ -119,9 +131,9 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 			return // instance was stopped — suppress noise
 		}
 		if err != nil {
-			Send(CommandMsg{Text: fmt.Sprintf("[skaffold exited: %v]", err)})
+			send(CommandMsg{Text: fmt.Sprintf("[skaffold exited: %v]", err)})
 		} else {
-			Send(CommandMsg{Text: "[skaffold exited cleanly]"})
+			send(CommandMsg{Text: "[skaffold exited cleanly]"})
 		}
 	}()
 
@@ -132,7 +144,7 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	go func() {
 		processSkaffoldEvents(watchCtx, port, func() {
 			readyOnce.Do(func() { close(ready) })
-		})
+		}, send)
 	}()
 
 	select {
@@ -175,7 +187,7 @@ func (s *SkaffoldStep) Stop(_ context.Context, _ string) error { return nil }
 // processSkaffoldEvents connects to the Skaffold HTTP event stream and reads
 // it until ctx is cancelled. It calls onDeployed when the first deploy-complete
 // event is seen, and sends a DebugPortMsg for each port-forward event.
-func processSkaffoldEvents(ctx context.Context, port int, onDeployed func()) {
+func processSkaffoldEvents(ctx context.Context, port int, onDeployed func(), send func(any)) {
 	url := fmt.Sprintf("http://localhost:%d/v1/events", port)
 
 	// Retry until the HTTP server comes up. Skaffold starts the HTTP listener
@@ -212,7 +224,7 @@ func processSkaffoldEvents(ctx context.Context, port int, onDeployed func()) {
 			onDeployed()
 		}
 		if msg := skaffoldPortEvent(line); msg != nil {
-			Send(*msg)
+			send(*msg)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -215,6 +216,9 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 		// Set up picker search inputs and resolve initial item lists.
 		switch spec.Kind {
 		case FieldKindSystemSelect:
+			if spec.SystemsFunc == nil {
+				panic(fmt.Sprintf("tui: FieldSpec %q has Kind FieldKindSystemSelect but nil SystemsFunc", spec.ID))
+			}
 			search := textinput.New()
 			search.Placeholder = "search systems or components…"
 			search.Width = inputW
@@ -228,6 +232,9 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 				}
 			}
 		case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
+			if spec.OptionsFunc == nil {
+				panic(fmt.Sprintf("tui: FieldSpec %q has Kind %v but nil OptionsFunc", spec.ID, spec.Kind))
+			}
 			search := textinput.New()
 			search.Placeholder = "search…"
 			search.Width = inputW

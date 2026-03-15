@@ -33,6 +33,12 @@ const maxBufLines = 5000
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
+func init() {
+	if len(spinnerFrames) == 0 {
+		panic("tui: spinnerFrames must not be empty")
+	}
+}
+
 // panelView holds the steps and log buffers for one content panel.
 type panelView struct {
 	defs      []StepDef  // steps assigned to this panel, in order
@@ -185,17 +191,17 @@ func (m *model) registerPipeline(defs []StepDef) {
 	m.panels = pv
 }
 
-// panelAndIdx returns the PanelID and buffer index for the step with the given ID.
-// Returns (0, -1) if not found.
-func (m *model) panelAndIdx(id string) (PanelID, int) {
+// panelAndIdx returns the PanelID, buffer index, and whether the step was found.
+// Returns (0, -1, false) if not found.
+func (m *model) panelAndIdx(id string) (PanelID, int, bool) {
 	for pid, pv := range m.panels {
 		for i, def := range pv.defs {
 			if def.Step.ID() == id {
-				return PanelID(pid), i
+				return PanelID(pid), i, true
 			}
 		}
 	}
-	return 0, -1
+	return 0, -1, false
 }
 
 // findDef returns the StepDef for the given step ID.

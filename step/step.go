@@ -13,6 +13,13 @@ var Send func(any)
 // SetSender registers the TUI message sender. Call once, before starting any steps.
 func SetSender(fn func(any)) { Send = fn }
 
+// Sender is an optional interface that steps can implement to receive an
+// injected message sender. Steps that implement Sender can be tested
+// independently by injecting a test sender, without relying on the global Send.
+type Sender interface {
+	SetSender(fn func(any))
+}
+
 // MFECommand describes how to run a micro-frontend.
 type MFECommand struct {
 	Cmd  string            // executable name

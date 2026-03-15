@@ -305,6 +305,23 @@ func validateTemplates(steps []StepTemplate) error {
 			}
 		}
 	}
+	// Validate that FieldSpec.Kind is consistent with the required func fields.
+	// FieldKindSelect/SingleSelect/MultiSelect require OptionsFunc.
+	// FieldKindSystemSelect requires SystemsFunc.
+	for _, t := range steps {
+		for _, f := range t.Fields {
+			switch f.Kind {
+			case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
+				if f.OptionsFunc == nil {
+					return fmt.Errorf("template %q field %q: Kind %v requires OptionsFunc to be non-nil", t.Label, f.ID, f.Kind)
+				}
+			case FieldKindSystemSelect:
+				if f.SystemsFunc == nil {
+					return fmt.Errorf("template %q field %q: FieldKindSystemSelect requires SystemsFunc to be non-nil", t.Label, f.ID)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -391,7 +408,15 @@ func Run(cfg Config) error {
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	prog = p
-	step.SetSender(func(msg any) { p.Send(msg) })
+	sender := func(msg any) { p.Send(msg) }
+	step.SetSender(sender)
+
+	// Inject sender into restored steps for per-step testability.
+	for _, def := range restoreDefs {
+		if s, ok := def.Step.(step.Sender); ok {
+			s.SetSender(sender)
+		}
+	}
 
 	// Start background watchers now that prog/Send are wired up.
 	// Skip steps with PanelNone (no output destination).

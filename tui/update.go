@@ -93,8 +93,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// ── Streaming log ingestion ──────────────────────────────────────────────
 
 	case step.LineMsg:
-		pid, idx := m.panelAndIdx(msg.ID)
-		if idx >= 0 {
+		if pid, idx, ok := m.panelAndIdx(msg.ID); ok {
 			pv := &m.panels[pid]
 			pv.bufs[idx] = appendLine(pv.bufs[idx], msg.Line)
 			if pv.activeIdx == idx {
@@ -105,8 +104,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case step.SetMsg:
-		pid, idx := m.panelAndIdx(msg.ID)
-		if idx >= 0 {
+		if pid, idx, ok := m.panelAndIdx(msg.ID); ok {
 			pv := &m.panels[pid]
 			pv.bufs[idx] = msg.Content
 			if pv.activeIdx == idx {
@@ -204,8 +202,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// AutoActivate: switch the panel view to show this step.
 		if def, ok := m.findDef(msg.id); ok && def.meta.autoActivate {
-			pid, idx := m.panelAndIdx(msg.id)
-			if idx >= 0 {
+			if pid, idx, ok := m.panelAndIdx(msg.id); ok {
 				pv := &m.panels[pid]
 				pv.activeIdx = idx
 				m.panelVPs[pid].SetContent(wrapContent(pv.bufs[idx], m.panelVPs[pid].Width))

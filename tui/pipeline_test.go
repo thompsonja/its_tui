@@ -484,7 +484,7 @@ func TestValidateTemplates_AllValidTemplates(t *testing.T) {
 	err := validateTemplates([]StepTemplate{
 		MinikubeTemplate(),
 		KubectlTemplate(),
-		SkaffoldTemplate(nil, nil),
+		SkaffoldTemplate(nil, StaticSystems()),
 		MFETemplate(nil, nil),
 	})
 	if err != nil {

@@ -14,7 +14,18 @@ import (
 // child processes (e.g. node workers spawned by npm).
 type MFEStep struct {
 	Cmd  MFECommand
-	pgid int // set by Start; used by Stop
+	pgid int      // set by Start; used by Stop
+	send func(any) // injected sender; falls back to global Send
+}
+
+// SetSender injects a message sender for testing. Falls back to the global Send.
+func (s *MFEStep) SetSender(fn func(any)) { s.send = fn }
+
+func (s *MFEStep) sender() func(any) {
+	if s.send != nil {
+		return s.send
+	}
+	return Send
 }
 
 func (s *MFEStep) ID() string                 { return "mfe" }
@@ -45,7 +56,7 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 		return err
 	}
 	s.pgid = cmd.Process.Pid
-	Send(PIDMsg{PID: cmd.Process.Pid})
+	s.sender()(PIDMsg{PID: cmd.Process.Pid})
 
 	// Kill the process group when the instance context is cancelled.
 	go func() {

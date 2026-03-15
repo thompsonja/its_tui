@@ -382,7 +382,7 @@ func (m *model) dispatchCommand(line string) {
 			e.cancel()
 		}
 		// Clear the panel buffer for this step.
-		if pid, idx := m.panelAndIdx(id); idx >= 0 {
+		if pid, idx, ok := m.panelAndIdx(id); ok {
 			m.panels[pid].bufs[idx] = nil
 			if m.panels[pid].activeIdx == idx {
 				m.panelVPs[pid].SetContent("")
@@ -573,6 +573,10 @@ func (m *model) dispatchCommand(line string) {
 
 func (m *model) executeStartFromWizard() {
 	wiz := m.wizard
+	if wiz == nil {
+		m.printLine("  internal error: wizard not initialized")
+		return
+	}
 	sp := m.statePath
 	name := m.configuredName()
 
@@ -582,6 +586,13 @@ func (m *model) executeStartFromWizard() {
 	if err != nil {
 		prog.Send(commandLineMsg("error: " + err.Error()))
 		return
+	}
+	// Inject message sender into steps that support it, so they can be
+	// tested without the global Send and send messages via prog.
+	for _, def := range defs {
+		if s, ok := def.Step.(step.Sender); ok {
+			s.SetSender(func(msg any) { prog.Send(msg) })
+		}
 	}
 
 	// Check if there's an existing instance state with step states (resume scenario)
@@ -604,14 +615,20 @@ func (m *model) executeStartFromWizard() {
 			}
 		}
 	}
-	go func() {
-		_ = SaveInstanceState(sp, InstanceState{
-			StartedAt:    time.Now().UTC().Format(time.RFC3339),
-			StringValues: values.str,
-			SliceValues:  values.strs,
-			StepStates:   stepStates,
-		})
-	}()
+	// SaveInstanceState must run synchronously before executeStart/executeStartWithResume
+	// spawn their goroutines. Those goroutines call UpdateStepState, and both functions
+	// do a read-modify-write on the state file. If SaveInstanceState runs asynchronously
+	// (after UpdateStepState(completed) has already fired), it overwrites the whole
+	// Instance with the initial "pending" states — leaving the file wrong on TUI exit
+	// and causing completed steps to be restarted on the next session.
+	if err := SaveInstanceState(sp, InstanceState{
+		StartedAt:    time.Now().UTC().Format(time.RFC3339),
+		StringValues: values.str,
+		SliceValues:  values.strs,
+		StepStates:   stepStates,
+	}); err != nil {
+		prog.Send(commandLineMsg(fmt.Sprintf("  warning: failed to save state: %v", err)))
+	}
 
 	m.switchToInstance(name)
 	m.activeDefs = defs // Store for use by stop command
@@ -720,9 +737,58 @@ func topoSortSteps(defs []StepDef) []StepDef {
 	return result
 }
 
+// waitForDeps blocks until all deps in waitFor are ready or ctx is cancelled.
+// For each dep that becomes ready it sends a stepDepReadyMsg for stepID.
+// Returns true when all deps are satisfied, false if ctx was cancelled first.
+func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}) bool {
+	if len(waitFor) == 0 {
+		return true
+	}
+	remaining := make(chan struct{}, len(waitFor))
+	for _, dep := range waitFor {
+		dep := dep
+		go func() {
+			if ch, ok := ready[dep]; ok {
+				select {
+				case <-ch:
+					prog.Send(stepDepReadyMsg{id: stepID, dep: dep})
+					remaining <- struct{}{}
+				case <-ctx.Done():
+				}
+			} else {
+				remaining <- struct{}{}
+			}
+		}()
+	}
+	for range waitFor {
+		select {
+		case <-remaining:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
+// notifyDependentsOfFailure sends a stepDepFailedMsg to every step that lists
+// failedID in its WaitFor.
+func notifyDependentsOfFailure(defs []StepDef, failedID string) {
+	for _, otherDef := range defs {
+		for _, dep := range otherDef.meta.waitFor {
+			if dep == failedID {
+				prog.Send(stepDepFailedMsg{id: otherDef.Step.ID(), failedDep: failedID})
+			}
+		}
+	}
+}
+
 // executeStart launches all step processes with dependency ordering.
 // Steps with WaitFor set block until their dependency signals ready.
 func (m *model) executeStart(defs []StepDef) {
+	// Capture instanceCtx by value now to prevent a race if the global is
+	// reassigned (stop/switch) while dep-waiting goroutines are still running.
+	ctx := instanceCtx
+
 	m.steps = map[string]*commandStep{}
 	m.stepCtxs = make(map[string]stepEntry)
 	name := m.instanceName
@@ -732,7 +798,7 @@ func (m *model) executeStart(defs []StepDef) {
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
-		stepCtx, stepCancel := context.WithCancel(instanceCtx)
+		stepCtx, stepCancel := context.WithCancel(ctx)
 		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
@@ -755,31 +821,10 @@ func (m *model) executeStart(defs []StepDef) {
 		id := def.Step.ID()
 		stepCtx := m.stepCtxs[id].ctx
 		go func() {
-			// Wait for all dependencies in parallel, crossing each off as it completes.
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+				return
+			}
 			if len(def.meta.waitFor) > 0 {
-				remaining := make(chan struct{}, len(def.meta.waitFor))
-				for _, dep := range def.meta.waitFor {
-					dep := dep
-					go func() {
-						if ch, ok := ready[dep]; ok {
-							select {
-							case <-ch:
-								prog.Send(stepDepReadyMsg{id: id, dep: dep})
-								remaining <- struct{}{}
-							case <-instanceCtx.Done():
-							}
-						} else {
-							remaining <- struct{}{}
-						}
-					}()
-				}
-				for range def.meta.waitFor {
-					select {
-					case <-remaining:
-					case <-instanceCtx.Done():
-						return
-					}
-				}
 				// Activate this step (triggers spinner + AutoActivate if set).
 				prog.Send(stepActivateMsg{id: id})
 			}
@@ -791,19 +836,8 @@ func (m *model) executeStart(defs []StepDef) {
 			// Start the step.
 			if err := def.Step.Start(stepCtx, name); err != nil {
 				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
-
-				// Close ready channel to unblock dependents
 				close(ready[id])
-
-				// Notify dependent steps of failure
-				for _, otherDef := range defs {
-					for _, dep := range otherDef.meta.waitFor {
-						if dep == id {
-							prog.Send(stepDepFailedMsg{id: otherDef.Step.ID(), failedDep: id})
-						}
-					}
-				}
-
+				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
 					prog.Send(stepDoneMsg{
 						id:    id,
@@ -816,15 +850,10 @@ func (m *model) executeStart(defs []StepDef) {
 
 			// Mark step as completed
 			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
-
-			// Signal ready to unblock any dependents.
 			close(ready[id])
-
-			// Invoke the OnReady callback.
 			if def.meta.onReady != nil {
 				go def.meta.onReady()
 			}
-
 			if !def.meta.hidden {
 				prog.Send(stepDoneMsg{
 					id:    id,
@@ -840,6 +869,10 @@ func (m *model) executeStart(defs []StepDef) {
 // Steps that completed successfully are skipped, failed steps are retried, and steps
 // that were running when the instance quit are restarted.
 func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]StepState) {
+	// Capture instanceCtx by value now to prevent a race if the global is
+	// reassigned (stop/switch) while dep-waiting goroutines are still running.
+	ctx := instanceCtx
+
 	m.steps = map[string]*commandStep{}
 	m.stepCtxs = make(map[string]stepEntry)
 	name := m.instanceName
@@ -850,7 +883,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
-		stepCtx, stepCancel := context.WithCancel(instanceCtx)
+		stepCtx, stepCancel := context.WithCancel(ctx)
 		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
@@ -894,31 +927,10 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		stepCtx := m.stepCtxs[id].ctx
 
 		go func() {
-			// Wait for all dependencies in parallel, crossing each off as it completes.
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+				return
+			}
 			if len(def.meta.waitFor) > 0 {
-				remaining := make(chan struct{}, len(def.meta.waitFor))
-				for _, dep := range def.meta.waitFor {
-					dep := dep
-					go func() {
-						if ch, ok := ready[dep]; ok {
-							select {
-							case <-ch:
-								prog.Send(stepDepReadyMsg{id: id, dep: dep})
-								remaining <- struct{}{}
-							case <-instanceCtx.Done():
-							}
-						} else {
-							remaining <- struct{}{}
-						}
-					}()
-				}
-				for range def.meta.waitFor {
-					select {
-					case <-remaining:
-					case <-instanceCtx.Done():
-						return
-					}
-				}
 				// Activate this step (triggers spinner + AutoActivate if set).
 				prog.Send(stepActivateMsg{id: id})
 			}
@@ -959,19 +971,8 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 			// Start the step.
 			if err := def.Step.Start(stepCtx, name); err != nil {
 				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
-
-				// Close ready channel to unblock dependents
 				close(ready[id])
-
-				// Notify dependent steps of failure
-				for _, otherDef := range defs {
-					for _, dep := range otherDef.meta.waitFor {
-						if dep == id {
-							prog.Send(stepDepFailedMsg{id: otherDef.Step.ID(), failedDep: id})
-						}
-					}
-				}
-
+				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
 					prog.Send(stepDoneMsg{
 						id:    id,
@@ -984,15 +985,10 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 
 			// Mark step as completed
 			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
-
-			// Signal ready to unblock any dependents.
 			close(ready[id])
-
-			// Invoke the OnReady callback.
 			if def.meta.onReady != nil {
 				go def.meta.onReady()
 			}
-
 			if !def.meta.hidden {
 				prog.Send(stepDoneMsg{
 					id:    id,

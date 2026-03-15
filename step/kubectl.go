@@ -8,7 +8,19 @@ import (
 
 // KubectlStep polls `kubectl get pods` every 5 s and updates its panel with the result.
 // It has no log file — output is sent directly via SetMsg.
-type KubectlStep struct{}
+type KubectlStep struct {
+	send func(any)
+}
+
+// SetSender injects a message sender for testing. Falls back to the global Send.
+func (s *KubectlStep) SetSender(fn func(any)) { s.send = fn }
+
+func (s *KubectlStep) sender() func(any) {
+	if s.send != nil {
+		return s.send
+	}
+	return Send
+}
 
 func (s *KubectlStep) ID() string                             { return "kubectl" }
 func (s *KubectlStep) LogPath(_ string) string                { return "" }
@@ -39,5 +51,5 @@ func (s *KubectlStep) poll() {
 	if err != nil && len(lines) == 0 {
 		lines = []string{"Waiting for cluster to be ready..."}
 	}
-	Send(SetMsg{ID: "kubectl", Content: lines})
+	s.sender()(SetMsg{ID: "kubectl", Content: lines})
 }
