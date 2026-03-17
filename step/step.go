@@ -66,8 +66,13 @@ func WatchStep(ctx context.Context, s Step, instanceName string) {
 
 // ResumeStep restarts steps with no log file after a session restore.
 // Steps with a log file are already covered by WatchStep.
-func ResumeStep(ctx context.Context, s Step, instanceName string) {
+// isCompleted should be true if the step already finished successfully.
+func ResumeStep(ctx context.Context, s Step, instanceName string, isCompleted bool) {
 	if s.LogPath(instanceName) != "" {
+		return
+	}
+	// Don't restart steps that already completed
+	if isCompleted {
 		return
 	}
 	_ = s.Start(ctx, instanceName)

@@ -423,7 +423,15 @@ func Run(cfg Config) error {
 	for _, def := range restoreDefs {
 		if def.meta.panel != PanelNone {
 			go watchStep(instanceCtx, def, restoreName)
-			go resumeStep(instanceCtx, def, restoreName)
+			// Check if step already completed before resuming
+			stepID := def.Step.ID()
+			isCompleted := false
+			if state.Instance != nil && state.Instance.StepStates != nil {
+				if ss, exists := state.Instance.StepStates[stepID]; exists {
+					isCompleted = (ss.Status == config.StepStatusCompleted)
+				}
+			}
+			go resumeStep(instanceCtx, def, restoreName, isCompleted)
 		}
 	}
 
