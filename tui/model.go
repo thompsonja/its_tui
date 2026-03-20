@@ -128,6 +128,10 @@ type model struct {
 	searchMode  bool
 	searchQuery string
 	searchInput textinput.Model
+
+	// Track startup completion for displaying startup time
+	totalSteps     int // total non-hidden steps for the current instance
+	completedSteps int // count of completed steps
 }
 
 // stepEntry holds the context and cancel function for a single step goroutine.

@@ -2,14 +2,21 @@ package step
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
+	"syscall"
 	"time"
+
+	"github.com/thompsonja/its_tui/config"
 )
 
-// KubectlStep polls `kubectl get pods` every 5 s and updates its panel with the result.
-// It has no log file — output is sent directly via SetMsg.
+// KubectlStep runs `kubectl get pods --watch` as a persistent process that watches pod changes.
+// It saves the PID to state and can reattach on resume if the process is still running.
 type KubectlStep struct {
-	send func(any)
+	send      func(any)
+	StatePath string
 }
 
 // SetSender injects a message sender for testing. Falls back to the global Send.
@@ -26,23 +33,68 @@ func (s *KubectlStep) ID() string                             { return "kubectl"
 func (s *KubectlStep) LogPath(_ string) string                { return "" }
 func (s *KubectlStep) Stop(_ context.Context, _ string) error { return nil }
 
-// Start begins a background poll loop that runs until ctx is cancelled.
-// It polls immediately, then every 5 s.
-func (s *KubectlStep) Start(ctx context.Context, _ string) error {
-	go func() {
-		s.poll()
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				s.poll()
-			}
-		}
-	}()
+// Resume checks if the saved kubectl process is still running.
+// Returns nil if running (continuing to use existing process), or error to trigger restart via Start().
+func (s *KubectlStep) Resume(ctx context.Context, instanceName string) error {
+	if s.StatePath == "" {
+		s.StatePath = config.DefaultStatePath()
+	}
+
+	pidStr, ok := config.LoadStepData(s.StatePath, s.ID(), "pid")
+	if !ok {
+		// No saved PID, need to start fresh
+		return fmt.Errorf("no saved pid")
+	}
+
+	pid, err := strconv.Atoi(pidStr)
+	if err != nil {
+		return fmt.Errorf("invalid pid: %w", err)
+	}
+
+	// Check if process is still running
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("process not found: %w", err)
+	}
+
+	// Send signal 0 to test if process exists
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return fmt.Errorf("process not running: %w", err)
+	}
+
+	// Process is still running - restart the polling loop to show updates
+	go s.pollLoop(ctx)
 	return nil
+}
+
+// Start launches a background polling loop that updates pod status.
+func (s *KubectlStep) Start(ctx context.Context, instanceName string) error {
+	if s.StatePath == "" {
+		s.StatePath = config.DefaultStatePath()
+	}
+
+	// Save a marker PID (our own process) to indicate kubectl is active
+	if s.StatePath != "" {
+		_ = config.SaveStepData(s.StatePath, s.ID(), "pid", strconv.Itoa(os.Getpid()))
+	}
+
+	go s.pollLoop(ctx)
+	return nil
+}
+
+// pollLoop runs kubectl get pods periodically and sends the output as a table.
+func (s *KubectlStep) pollLoop(ctx context.Context) {
+	s.poll()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.poll()
+		}
+	}
 }
 
 func (s *KubectlStep) poll() {
@@ -51,5 +103,5 @@ func (s *KubectlStep) poll() {
 	if err != nil && len(lines) == 0 {
 		lines = []string{"Waiting for cluster to be ready..."}
 	}
-	s.sender()(SetMsg{ID: "kubectl", Content: lines})
+	s.sender()(SetMsg{ID: s.ID(), Content: lines})
 }

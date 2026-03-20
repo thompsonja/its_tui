@@ -53,54 +53,76 @@ func main() {
 					return nil, nil
 				},
 			},
+			// components step: contributes the "components" field using the
+			// systems/components hierarchy. Like the env step, it doesn't start
+			// a process - the selected components are read by the skaffold
+			// generate callback below.
+			{
+				ID:     "components",
+				Panel:  tui.PanelTopLeft,
+				Label:  "Components",
+				Hidden: true,
+				Fields: []tui.FieldSpec{
+					{
+						ID:    "components",
+						Label: "Components",
+						Kind:  tui.FieldKindSystemSelect,
+						SystemsFunc: func(v tui.WizardValues) []tui.System {
+							return []tui.System{
+								{
+									Name: "checkout",
+									Components: []tui.Component{
+										{Name: "checkout-backend"},
+										{Name: "checkout-bff"},
+									},
+								},
+								{
+									Name: "user",
+									Components: []tui.Component{
+										{Name: "user-service"},
+										{Name: "user-bff"},
+									},
+								},
+								{
+									Name: "product",
+									Components: []tui.Component{
+										{Name: "product-service"},
+										{Name: "product-bff"},
+									},
+								},
+								{
+									Name: "order",
+									Components: []tui.Component{
+										{Name: "order-service"},
+										{Name: "order-bff"},
+									},
+								},
+								{
+									Name: "analytics",
+									Components: []tui.Component{
+										{Name: "analytics-backend"},
+										{Name: "analytics-bff"},
+									},
+								},
+							}
+						},
+					},
+				},
+				Build: func(v tui.WizardValues) (tui.Step, error) {
+					return nil, nil
+				},
+			},
 			tui.SkaffoldTemplate(
 				func(v tui.WizardValues) (string, []string, error) {
 					// Generate a skaffold.yaml with the selected port and env profile.
+					// The "components" field from the step above is available in v but
+					// not used in this simple example.
 					env := v.String("env")
 					port := v.String("api_port")
 					if port == "" {
 						port = "9001"
 					}
 					return generateSkaffoldYAML(sampleDir(), env, port)
-				},
-				func(v tui.WizardValues) []tui.System {
-					return []tui.System{
-						{
-							Name: "checkout",
-							Components: []tui.Component{
-								{Name: "checkout-backend"},
-								{Name: "checkout-bff"},
-							},
-						},
-						{
-							Name: "user",
-							Components: []tui.Component{
-								{Name: "user-service"},
-								{Name: "user-bff"},
-							},
-						},
-						{
-							Name: "product",
-							Components: []tui.Component{
-								{Name: "product-service"},
-								{Name: "product-bff"},
-							},
-						},
-						{
-							Name: "order",
-							Components: []tui.Component{
-								{Name: "order-service"},
-								{Name: "order-bff"},
-							},
-						},
-						{
-							Name: "analytics",
-							Components: []tui.Component{
-								{Name: "analytics-backend"},
-								{Name: "analytics-bff"},
-							},
-						},
-					}
 				},
 			),
 			tui.MFETemplate(

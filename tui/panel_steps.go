@@ -86,4 +86,18 @@ func (m *model) finishStep(id string, ok bool, label string) {
 		m.commandsBuf[s.bufIdx] = "  " + icon + " " + label
 	}
 	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
+
+	// Track startup completion
+	if ok && m.instanceName != "" {
+		m.completedSteps++
+		// When all steps complete, mark the instance as ready and display startup time
+		if m.completedSteps == m.totalSteps && m.totalSteps > 0 {
+			sp := m.statePath
+			go func() {
+				_ = MarkReady(sp)
+				// Send message to display startup time
+				prog.Send(allStepsReadyMsg{})
+			}()
+		}
+	}
 }

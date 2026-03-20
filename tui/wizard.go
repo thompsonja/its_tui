@@ -45,10 +45,12 @@ type fieldState struct {
 
 // startWizard drives the instance-start configuration screen.
 type startWizard struct {
-	fields     []FieldSpec  // all specs collected from templates, in order
-	states     []fieldState // one per field
-	fieldIdx   int          // index into states; len(states) = Buttons row
-	confirmIdx int          // 0 = Start, 1 = Cancel
+	fields       []FieldSpec    // all specs collected from templates, in order
+	states       []fieldState   // one per field
+	fieldIdx     int            // index into states; len(states) = Buttons row
+	confirmIdx   int            // 0 = Start, 1 = Cancel
+	templateIdxs []int          // maps field index to template index
+	templates    []StepTemplate // reference to original templates
 }
 
 // buildValues collects the wizard's current selections into a WizardValues.
@@ -204,8 +206,13 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 	inputW := max(20, m.commandsVP.Width-16)
 
 	// Collect all fields from all templates, in template order.
+	// Track which template each field belongs to for visual grouping.
 	var fields []FieldSpec
-	for _, tmpl := range m.cfg.Steps {
+	var templateIdxs []int
+	for i, tmpl := range m.cfg.Steps {
+		for range tmpl.Fields {
+			templateIdxs = append(templateIdxs, i)
+		}
 		fields = append(fields, tmpl.Fields...)
 	}
 
@@ -275,8 +282,10 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 	}
 
 	return &startWizard{
-		fields: fields,
-		states: states,
+		fields:       fields,
+		states:       states,
+		templateIdxs: templateIdxs,
+		templates:    m.cfg.Steps,
 	}
 }
 

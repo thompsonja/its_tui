@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -177,6 +178,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.isTestsTabActive(PanelBottomRight) {
 			m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
 			m.testVP.GotoBottom()
+		}
+
+	case autoStatusMsg:
+		// Automatically run status command when resuming a session
+		m.dispatchCommand("status")
+
+	case allStepsReadyMsg:
+		// Display startup completion time
+		sp := m.statePath
+		state, err := LoadState(sp)
+		if err == nil && state.Instance != nil && state.Instance.StartedAt != "" && state.Instance.ReadyAt != "" {
+			started, err1 := time.Parse(time.RFC3339, state.Instance.StartedAt)
+			ready, err2 := time.Parse(time.RFC3339, state.Instance.ReadyAt)
+			if err1 == nil && err2 == nil {
+				duration := ready.Sub(started)
+				m.printLine(fmt.Sprintf("  ✓ All steps ready (startup took %s)", duration.Round(time.Millisecond)))
+			}
 		}
 
 	case stepDoneMsg:
@@ -361,6 +379,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					} else if m.isTestsTabActive(pid) {
 						m.testVP.SetContent(wrapContent(m.testBuf, m.testVP.Width))
 						m.testVP.GotoBottom()
+					}
+					// Save panel tab state
+					if m.instanceName != "" {
+						go func() {
+							tabs := [3]int{m.panels[0].activeIdx, m.panels[1].activeIdx, m.panels[2].activeIdx}
+							_ = SavePanelTabs(m.statePath, tabs)
+						}()
 					}
 				} else if m.isDebugTabActive(pid) {
 					if msg.String() == "c" {

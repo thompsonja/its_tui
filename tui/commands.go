@@ -430,6 +430,63 @@ func (m *model) dispatchCommand(line string) {
 			}
 		}
 
+	case "status":
+		m.printLine("$ status")
+		if m.instanceName == "" {
+			m.printLine("  no active instance — run: start")
+		} else {
+			// Load step states from the state file
+			state, err := LoadState(sp)
+			if err != nil || state.Instance == nil || len(state.Instance.StepStates) == 0 {
+				m.printLine("  no step status available")
+			} else {
+				// Display startup time if available
+				if state.Instance.StartedAt != "" {
+					started, err1 := time.Parse(time.RFC3339, state.Instance.StartedAt)
+					if err1 == nil {
+						if state.Instance.ReadyAt != "" {
+							ready, err2 := time.Parse(time.RFC3339, state.Instance.ReadyAt)
+							if err2 == nil {
+								duration := ready.Sub(started)
+								m.printLine(fmt.Sprintf("  Instance startup took: %s", duration.Round(time.Millisecond)))
+							}
+						} else {
+							elapsed := time.Since(started)
+							m.printLine(fmt.Sprintf("  Instance starting... (elapsed: %s)", elapsed.Round(time.Second)))
+						}
+					}
+				}
+
+				m.printLine("")
+				m.printLine("  Step Status:")
+				// Show steps in order from the active defs
+				for _, def := range m.activeDefs {
+					id := def.Step.ID()
+					if ss, ok := state.Instance.StepStates[id]; ok {
+						statusIcon := "○"
+						switch ss.Status {
+						case config.StepStatusCompleted:
+							statusIcon = "✓"
+						case config.StepStatusRunning:
+							statusIcon = "▶"
+						case config.StepStatusFailed:
+							statusIcon = "✗"
+						case config.StepStatusSkipped:
+							statusIcon = "⊘"
+						case config.StepStatusPending:
+							statusIcon = "○"
+						}
+						label := def.effectiveLabel()
+						statusLine := fmt.Sprintf("  %s %-15s %s", statusIcon, label, ss.Status)
+						if ss.Error != "" {
+							statusLine += fmt.Sprintf(" - %s", ss.Error)
+						}
+						m.printLine(statusLine)
+					}
+				}
+			}
+		}
+
 	case "test":
 		m.printLine("$ test")
 		if m.instanceName == "" {
@@ -793,6 +850,15 @@ func (m *model) executeStart(defs []StepDef) {
 	m.stepCtxs = make(map[string]stepEntry)
 	name := m.instanceName
 
+	// Initialize startup tracking
+	m.completedSteps = 0
+	m.totalSteps = 0
+	for _, def := range defs {
+		if !def.meta.hidden {
+			m.totalSteps++
+		}
+	}
+
 	// Create per-step contexts and build a ready channel for each step.
 	ready := make(map[string]chan struct{}, len(defs))
 	for _, def := range defs {
@@ -878,6 +944,15 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	name := m.instanceName
 	sp := m.statePath
 
+	// Initialize startup tracking
+	m.completedSteps = 0
+	m.totalSteps = 0
+	for _, def := range defs {
+		if !def.meta.hidden {
+			m.totalSteps++
+		}
+	}
+
 	// Create per-step contexts and build a ready channel for each step.
 	ready := make(map[string]chan struct{}, len(defs))
 	for _, def := range defs {
@@ -936,40 +1011,33 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 			}
 
 			// Handle based on resume action
+			var err error
 			if action == ResumeActionSkip {
-				// Step already completed - skip Start(), just mark as done
-				_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
-				close(ready[id])
-				if def.meta.onReady != nil {
-					go def.meta.onReady()
+				// Step completed - try Resume() or skip if not implemented
+				_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+				err = step.ResumeStep(stepCtx, def.Step, name, true)
+			} else {
+				// Step needs restart (retry/restart/start)
+
+				// Truncate log if restarting a previously-running step
+				if action == ResumeActionRestart {
+					if lp := def.Step.LogPath(name); lp != "" {
+						_ = os.Truncate(lp, 0)
+					}
 				}
-				if !def.meta.hidden {
-					prog.Send(stepDoneMsg{
-						id:    id,
-						ok:    true,
-						label: def.effectiveLabel() + " (restored)",
-					})
+
+				// Clear error for retry
+				if action == ResumeActionRetry {
+					_ = UpdateStepState(sp, id, config.StepStatusPending, nil)
 				}
-				return
+
+				// Mark step as running and start/restart it
+				_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+				err = def.Step.Start(stepCtx, name)
 			}
 
-			// For retry/restart/start: truncate log if restarting
-			if action == ResumeActionRestart {
-				if lp := def.Step.LogPath(name); lp != "" {
-					_ = os.Truncate(lp, 0)
-				}
-			}
-
-			// Clear error for retry
-			if action == ResumeActionRetry {
-				_ = UpdateStepState(sp, id, config.StepStatusPending, nil)
-			}
-
-			// Mark step as running
-			_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
-
-			// Start the step.
-			if err := def.Step.Start(stepCtx, name); err != nil {
+			// Handle error from Start() or ResumeStep()
+			if err != nil {
 				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)

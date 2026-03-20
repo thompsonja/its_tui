@@ -39,12 +39,17 @@ var (
 	SaveInstanceState    = config.SaveInstanceState
 	MarkActive           = config.MarkActive
 	MarkInactive         = config.MarkInactive
+	MarkReady            = config.MarkReady
 	SaveMFEPGID          = config.SaveMFEPGID
 	SaveDebugPorts       = config.SaveDebugPorts
 	SavePorts            = config.SavePorts
 	SaveTheme            = config.SaveTheme
 	AppendCommandHistory = config.AppendCommandHistory
 	UpdateStepState      = config.UpdateStepState
+	SaveStepData         = config.SaveStepData
+	LoadStepData         = config.LoadStepData
+	GetStepData          = config.GetStepData
+	SavePanelTabs        = config.SavePanelTabs
 	DefaultStatePath     = config.DefaultStatePath
 )
 
@@ -386,6 +391,14 @@ func Run(cfg Config) error {
 		restoreDefs = m.buildPipelineFromState(restoreName, state.Instance)
 		m.activeDefs = restoreDefs // Store for use by stop command
 		m.registerPipeline(restoreDefs)
+
+		// Restore active tab indices for each panel
+		for i := 0; i < 3; i++ {
+			if state.Instance.PanelTabs[i] < len(m.panels[i].defs) {
+				m.panels[i].activeIdx = state.Instance.PanelTabs[i]
+			}
+		}
+
 		for _, dp := range state.Instance.ForwardedPorts {
 			m.fwdPorts = append(m.fwdPorts, step.DebugPortMsg{
 				LocalPort:    dp.LocalPort,
@@ -418,21 +431,27 @@ func Run(cfg Config) error {
 		}
 	}
 
-	// Start background watchers now that prog/Send are wired up.
-	// Skip steps with PanelNone (no output destination).
-	for _, def := range restoreDefs {
-		if def.meta.panel != PanelNone {
-			go watchStep(instanceCtx, def, restoreName)
-			// Check if step already completed before resuming
-			stepID := def.Step.ID()
-			isCompleted := false
-			if state.Instance != nil && state.Instance.StepStates != nil {
-				if ss, exists := state.Instance.StepStates[stepID]; exists {
-					isCompleted = (ss.Status == config.StepStatusCompleted)
-				}
+	// Restore the instance using executeStartWithResume to properly handle step states.
+	// This checks saved state for each step and skips/retries/restarts as appropriate.
+	if len(restoreDefs) > 0 && state.Instance != nil && state.Instance.StepStates != nil {
+		m.executeStartWithResume(restoreDefs, state.Instance.StepStates)
+
+		// Start watchers for all steps with visible panels.
+		for _, def := range restoreDefs {
+			if def.meta.panel == PanelNone {
+				continue
 			}
-			go resumeStep(instanceCtx, def, restoreName, isCompleted)
+			id := def.Step.ID()
+			if e, ok := m.stepCtxs[id]; ok {
+				go watchStep(e.ctx, def, restoreName)
+			}
 		}
+
+		// Automatically show status on resume
+		go func() {
+			// Give the TUI a moment to initialize before sending the status command
+			p.Send(autoStatusMsg{})
+		}()
 	}
 
 	if _, err := p.Run(); err != nil {

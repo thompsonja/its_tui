@@ -615,6 +615,35 @@ func (m model) renderWizard() string {
 	return m.renderWizardCustom()
 }
 
+// renderSectionHeader creates a visual separator line with the step label.
+// Returns empty string if the template has no label.
+func renderSectionHeader(tmpl StepTemplate, values WizardValues, width int) string {
+	// Get the label (use LabelFunc if available, otherwise Label)
+	label := tmpl.Label
+	if tmpl.LabelFunc != nil {
+		label = tmpl.LabelFunc(values)
+	}
+
+	// Skip headers for templates with no label
+	if label == "" {
+		return ""
+	}
+
+	// Create separator line: "▬▬▬ Label ▬▬▬▬▬▬▬▬..."
+	const sepChar = "▬"
+	prefix := sepChar + sepChar + sepChar + " " + label + " "
+	remaining := width - lipgloss.Width(prefix)
+	if remaining < 0 {
+		remaining = 0
+	}
+
+	separator := prefix + strings.Repeat(sepChar, remaining)
+
+	// Style with muted color
+	style := lipgloss.NewStyle().Foreground(currentTheme.Muted)
+	return style.Render(separator)
+}
+
 func renderSelectField(i int, s *fieldState, ws wizStyles, activeField, labelW int) []string {
 	focused := activeField == i
 	return []string{
@@ -868,14 +897,31 @@ func (m model) renderWizardCustom() string {
 	var lines []string
 	lines = append(lines, "") // leading blank
 
+	prevTemplateIdx := -1
+	values := wiz.buildValues()
+
 	for i := range wiz.states {
 		s := &wiz.states[i]
 
-		// Blank line before field, except between consecutive Select fields.
-		if i > 0 {
-			prev := &wiz.states[i-1]
-			if !(s.spec.Kind == FieldKindSelect && prev.spec.Kind == FieldKindSelect) {
-				lines = append(lines, "")
+		// Insert section header when template changes
+		currentTemplateIdx := wiz.templateIdxs[i]
+		if currentTemplateIdx != prevTemplateIdx {
+			if len(lines) > 1 { // More than just the leading blank
+				lines = append(lines, "") // blank line before header
+			}
+
+			header := renderSectionHeader(wiz.templates[currentTemplateIdx], values, m.commandsVP.Width-4)
+			if header != "" {
+				lines = append(lines, "  "+header)
+			}
+			prevTemplateIdx = currentTemplateIdx
+		} else {
+			// Blank line before field, except between consecutive Select fields.
+			if i > 0 {
+				prev := &wiz.states[i-1]
+				if !(s.spec.Kind == FieldKindSelect && prev.spec.Kind == FieldKindSelect) {
+					lines = append(lines, "")
+				}
 			}
 		}
 
@@ -963,6 +1009,7 @@ func (m *model) helpContent(width int) string {
 		{"help", "show this help"},
 		{"start", "start the instance"},
 		{"stop", "stop instance + delete cluster"},
+		{"status", "show step status"},
 		{"logs", "show log file paths"},
 		{"test [label]", "run a test suite"},
 		{"theme [name]", "set color theme"},

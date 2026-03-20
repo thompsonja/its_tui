@@ -50,4 +50,10 @@ type (
 
 	// testDoneMsg signals that a test run has completed.
 	testDoneMsg struct{ ok bool }
+
+	// autoStatusMsg triggers an automatic status command when resuming a session.
+	autoStatusMsg struct{}
+
+	// allStepsReadyMsg signals that all steps have completed startup.
+	allStepsReadyMsg struct{}
 )

@@ -46,6 +46,27 @@ type Step interface {
 	Stop(ctx context.Context, instanceName string) error
 }
 
+// Resumer is an optional interface that steps can implement to customize
+// their resume behavior when the TUI is restarted with an existing instance.
+// If a step implements Resumer, Resume() is called instead of Start() during
+// session restore (unless the step previously failed, in which case Start() is
+// always called to retry).
+type Resumer interface {
+	// Resume is called when restoring a session for a step that previously
+	// completed or was running when the TUI exited.
+	//
+	// Return nil to indicate the step is ready (e.g., process still running,
+	// or work already done and still valid).
+	//
+	// Return an error if the step needs to be restarted via Start().
+	//
+	// Common patterns:
+	//   - Check if process is still running and return nil if so
+	//   - Verify previous work is still valid (e.g., cluster exists)
+	//   - Always return error to force restart (same as not implementing Resumer)
+	Resume(ctx context.Context, instanceName string) error
+}
+
 // WatchStep tails the step's log file and forwards each line via Send.
 // Steps with no log file (LogPath=="") are skipped — they send output themselves.
 // Blocks until ctx is cancelled — call it in a goroutine.
@@ -64,16 +85,36 @@ func WatchStep(ctx context.Context, s Step, instanceName string) {
 	})
 }
 
-// ResumeStep restarts steps with no log file after a session restore.
-// Steps with a log file are already covered by WatchStep.
-// isCompleted should be true if the step already finished successfully.
-func ResumeStep(ctx context.Context, s Step, instanceName string, isCompleted bool) {
-	if s.LogPath(instanceName) != "" {
-		return
+// ResumeStep handles session restore for steps based on their previous state.
+//
+// The resume logic:
+// 1. If step already completed and doesn't implement Resumer: skip (work is done)
+// 2. If step implements Resumer: call Resume() to check if step is ready
+//    - If Resume() returns nil: step is ready, no action needed
+//    - If Resume() returns error: call Start() to restart the step
+// 3. If step was running or pending: call Start() to restart
+//
+// This allows steps to define custom resume behavior:
+//   - Minikube can check if cluster is still running
+//   - Skaffold can always restart its process
+//   - One-time setup steps can skip if work is done
+func ResumeStep(ctx context.Context, s Step, instanceName string, wasCompleted bool) error {
+	// If step has custom resume logic, use it
+	if resumer, ok := s.(Resumer); ok {
+		if err := resumer.Resume(ctx, instanceName); err != nil {
+			// Resume failed, need to call Start()
+			return s.Start(ctx, instanceName)
+		}
+		// Resume succeeded, step is ready
+		return nil
 	}
-	// Don't restart steps that already completed
-	if isCompleted {
-		return
+
+	// Default behavior: skip completed steps, restart others
+	if wasCompleted {
+		// No custom resume logic and step completed - assume work is still valid
+		return nil
 	}
-	_ = s.Start(ctx, instanceName)
+
+	// Step was not completed (running/pending/failed) - restart it
+	return s.Start(ctx, instanceName)
 }

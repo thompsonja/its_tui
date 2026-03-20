@@ -45,13 +45,16 @@ type StepState struct {
 // StartedAt is stamped when the cluster is healthy, and MFEPGID is set when
 // the MFE process starts. Instance is nil when nothing is running.
 type InstanceState struct {
-	StartedAt      string              `json:"started_at,omitempty"`
-	MFEPGID        int                 `json:"mfe_pgid,omitempty"`
-	StringValues   map[string]string   `json:"string_values,omitempty"`
-	SliceValues    map[string][]string `json:"slice_values,omitempty"`
-	DebugPorts     []DebugPort         `json:"debug_ports,omitempty"`
-	ForwardedPorts []DebugPort         `json:"forwarded_ports,omitempty"`
-	StepStates     map[string]StepState `json:"step_states,omitempty"` // NEW: step state tracking
+	StartedAt      string                       `json:"started_at,omitempty"`
+	ReadyAt        string                       `json:"ready_at,omitempty"`            // timestamp when all steps completed
+	MFEPGID        int                          `json:"mfe_pgid,omitempty"`
+	StringValues   map[string]string            `json:"string_values,omitempty"`
+	SliceValues    map[string][]string          `json:"slice_values,omitempty"`
+	DebugPorts     []DebugPort                  `json:"debug_ports,omitempty"`
+	ForwardedPorts []DebugPort                  `json:"forwarded_ports,omitempty"`
+	StepStates     map[string]StepState         `json:"step_states,omitempty"`         // step execution state
+	StepData       map[string]map[string]string `json:"step_data,omitempty"`           // per-step key-value storage
+	PanelTabs      [3]int                       `json:"panel_tabs,omitempty"`          // active tab index for each panel (TopLeft, TopRight, BottomRight)
 }
 
 // DebugPort records one forwarded debug port from skaffold debug.
@@ -273,5 +276,101 @@ func UpdateStepState(statePath, stepID string, status StepStatus, err error) err
 	}
 
 	s.Instance.StepStates[stepID] = ss
+	return saveStateUnsafe(statePath, s)
+}
+
+// SaveStepData atomically saves a key-value pair for a specific step.
+// Steps can use this to persist configuration or state across TUI sessions.
+// Returns an error if there's no active instance or if the save fails.
+func SaveStepData(statePath, stepID, key, value string) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
+	if err != nil || s.Instance == nil {
+		return err
+	}
+	if s.Instance.StepData == nil {
+		s.Instance.StepData = make(map[string]map[string]string)
+	}
+	if s.Instance.StepData[stepID] == nil {
+		s.Instance.StepData[stepID] = make(map[string]string)
+	}
+	s.Instance.StepData[stepID][key] = value
+	return saveStateUnsafe(statePath, s)
+}
+
+// LoadStepData retrieves a saved value for a step's key.
+// Returns the value and true if found, or empty string and false if not found.
+func LoadStepData(statePath, stepID, key string) (string, bool) {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
+	if err != nil || s.Instance == nil {
+		return "", false
+	}
+	if s.Instance.StepData == nil {
+		return "", false
+	}
+	stepData, ok := s.Instance.StepData[stepID]
+	if !ok {
+		return "", false
+	}
+	value, ok := stepData[key]
+	return value, ok
+}
+
+// GetStepData returns all saved key-value pairs for a specific step.
+// Returns an empty map if the step has no saved data.
+func GetStepData(statePath, stepID string) map[string]string {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
+	if err != nil || s.Instance == nil {
+		return map[string]string{}
+	}
+	if s.Instance.StepData == nil {
+		return map[string]string{}
+	}
+	if stepData, ok := s.Instance.StepData[stepID]; ok {
+		// Return a copy to prevent external mutations
+		result := make(map[string]string, len(stepData))
+		for k, v := range stepData {
+			result[k] = v
+		}
+		return result
+	}
+	return map[string]string{}
+}
+
+// SavePanelTabs persists the active tab index for each panel.
+func SavePanelTabs(statePath string, tabs [3]int) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
+	if err != nil || s.Instance == nil {
+		return err
+	}
+	s.Instance.PanelTabs = tabs
+	return saveStateUnsafe(statePath, s)
+}
+
+// MarkReady stamps state.Instance.ReadyAt with the current time to indicate
+// that all steps have completed their startup.
+func MarkReady(statePath string) error {
+	stateMu.Lock()
+	defer stateMu.Unlock()
+
+	s, err := loadStateUnsafe(statePath)
+	if err != nil || s.Instance == nil {
+		return err
+	}
+	// Only set ReadyAt once
+	if s.Instance.ReadyAt == "" {
+		s.Instance.ReadyAt = time.Now().UTC().Format(time.RFC3339)
+	}
 	return saveStateUnsafe(statePath, s)
 }

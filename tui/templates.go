@@ -39,7 +39,9 @@ func KubectlTemplate() StepTemplate {
 		WaitFor:      []string{"minikube"},
 		AutoActivate: true,
 		Hidden:       true,
-		Build:        func(v WizardValues) (Step, error) { return &KubectlStep{}, nil },
+		Build: func(v WizardValues) (Step, error) {
+			return &KubectlStep{StatePath: DefaultStatePath()}, nil
+		},
 	}
 }
 
@@ -48,14 +50,13 @@ func KubectlTemplate() StepTemplate {
 // generate is called with the full wizard values and should return the path to
 // a skaffold.yaml and an optional list of skaffold profiles to activate.
 // Returning an empty path skips the step; returning an error aborts the wizard.
-// The wizard values include the "components" ([]string) and "mode" fields
-// contributed by this template, as well as any fields from other templates in
-// the pipeline (e.g. an "env" field from a companion step).
+// The wizard values include the "mode" field contributed by this template, as
+// well as any fields from other templates in the pipeline (e.g. an "env" field
+// from a companion step, or "components" from a custom selection step).
 //
-// systemsfunc provides the hierarchical system/component data shown in the wizard.
-// It is called at wizard-open and after every field change, enabling dynamic
-// updates based on other field selections.
-func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error), systemsfunc func(WizardValues) []System) StepTemplate {
+// If you need component selection, add a separate Hidden step with a
+// FieldKindSystemSelect field (see the "env" step pattern in sample/main.go).
+func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error)) StepTemplate {
 	return StepTemplate{
 		ID:    "skaffold",
 		Panel: PanelTopRight,
@@ -68,7 +69,6 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 		},
 		WaitFor: []string{"minikube"},
 		Fields: []FieldSpec{
-			{ID: "components", Label: "Components", Kind: FieldKindSystemSelect, SystemsFunc: systemsfunc},
 			{ID: "mode", Label: "Mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "run", "debug"), Default: 0},
 		},
 		Commands: []CommandSpec{
@@ -86,25 +86,6 @@ func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []str
 					}
 					prog.Send(commandLineMsg(fmt.Sprintf("  skaffold running in %s mode", mode)))
 					prog.Send(commandLineMsg(fmt.Sprintf("  instance: %s", instanceName)))
-					return nil
-				},
-			},
-			{
-				Name: "info",
-				Help: "show skaffold configuration details",
-				Handler: func(args []string, instanceName string, values WizardValues) error {
-					mode := values.String("mode")
-					if mode == "" {
-						mode = "dev"
-					}
-					components := values.Strings("components")
-					prog.Send(commandLineMsg(fmt.Sprintf("  mode: %s", mode)))
-					prog.Send(commandLineMsg(fmt.Sprintf("  components: %d selected", len(components))))
-					if len(components) > 0 {
-						for _, c := range components {
-							prog.Send(commandLineMsg(fmt.Sprintf("    - %s", c)))
-						}
-					}
 					return nil
 				},
 			},
