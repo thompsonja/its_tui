@@ -440,24 +440,17 @@ func (m *model) dispatchCommand(line string) {
 			if err != nil || state.Instance == nil || len(state.Instance.StepStates) == 0 {
 				m.printLine("  no step status available")
 			} else {
-				// Display startup time if available
-				if state.Instance.StartedAt != "" {
+				// Display startup time only if startup completed
+				if state.Instance.StartedAt != "" && state.Instance.ReadyAt != "" {
 					started, err1 := time.Parse(time.RFC3339, state.Instance.StartedAt)
-					if err1 == nil {
-						if state.Instance.ReadyAt != "" {
-							ready, err2 := time.Parse(time.RFC3339, state.Instance.ReadyAt)
-							if err2 == nil {
-								duration := ready.Sub(started)
-								m.printLine(fmt.Sprintf("  Instance startup took: %s", duration.Round(time.Millisecond)))
-							}
-						} else {
-							elapsed := time.Since(started)
-							m.printLine(fmt.Sprintf("  Instance starting... (elapsed: %s)", elapsed.Round(time.Second)))
-						}
+					ready, err2 := time.Parse(time.RFC3339, state.Instance.ReadyAt)
+					if err1 == nil && err2 == nil {
+						duration := ready.Sub(started)
+						m.printLine(fmt.Sprintf("  Instance startup took: %s", duration.Round(time.Millisecond)))
+						m.printLine("")
 					}
 				}
 
-				m.printLine("")
 				m.printLine("  Step Status:")
 				// Show steps in order from the active defs
 				for _, def := range m.activeDefs {
