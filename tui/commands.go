@@ -168,11 +168,15 @@ const (
 func determineResumeAction(stepID string, savedState map[string]StepState) ResumeAction {
 	ss, exists := savedState[stepID]
 	if !exists {
+		fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: not found in saved state\n", stepID)
 		return ResumeActionStart
 	}
 
+	fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: status=%s\n", stepID, ss.Status)
+
 	switch ss.Status {
 	case config.StepStatusCompleted:
+		fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: returning ResumeActionSkip\n", stepID)
 		return ResumeActionSkip
 	case config.StepStatusFailed:
 		return ResumeActionRetry
@@ -1005,10 +1009,19 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 
 			// Handle based on resume action
 			var err error
+			wasAlreadyCompleted := false
 			if action == ResumeActionSkip {
 				// Step completed - try Resume() or skip if not implemented
-				_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+				// Don't change state - it should stay Completed unless Resume() fails
 				err = step.ResumeStep(stepCtx, def.Step, name, true)
+				if err != nil {
+					// Resume failed, need to restart - mark as running and call Start()
+					_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+					err = def.Step.Start(stepCtx, name)
+				} else {
+					// Resume succeeded - step stays in Completed state
+					wasAlreadyCompleted = true
+				}
 			} else {
 				// Step needs restart (retry/restart/start)
 
@@ -1044,8 +1057,10 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				return
 			}
 
-			// Mark step as completed
-			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
+			// Mark step as completed (skip if already completed from successful resume)
+			if !wasAlreadyCompleted {
+				_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
+			}
 			close(ready[id])
 			if def.meta.onReady != nil {
 				go def.meta.onReady()
