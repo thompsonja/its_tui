@@ -19,19 +19,19 @@ import (
 )
 
 // SkaffoldLogPath returns the per-instance log file written by skaffold.
-func SkaffoldLogPath(instanceName string) string {
+func SkaffoldLogPath(instanceName, mode string) string {
 	if instanceName == "" {
 		return ""
 	}
-	return filepath.Join(config.GetLogDir(), fmt.Sprintf("skaffold_%s.log", instanceName))
+	return filepath.Join(config.GetLogDir(), fmt.Sprintf("skaffold_%s_%s.log", instanceName, mode))
 }
 
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
 // It depends on minikube being ready before Start is called.
 type SkaffoldStep struct {
-	Path     string   // path to skaffold.yaml
-	Mode     string   // "dev", "run", or "debug"; defaults to "dev"
-	Profiles []string // optional skaffold profiles to activate (--profile flags)
+	Path     string    // path to skaffold.yaml
+	Mode     string    // "dev", "run", or "debug"; defaults to "dev"
+	Profiles []string  // optional skaffold profiles to activate (--profile flags)
 	send     func(any) // injected sender; falls back to global Send
 }
 
@@ -46,7 +46,7 @@ func (s *SkaffoldStep) sender() func(any) {
 }
 
 func (s *SkaffoldStep) ID() string                 { return "skaffold" }
-func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name) }
+func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name, s.Mode) }
 
 // Start launches skaffold and blocks until it signals readiness:
 //   - run mode: blocks until the process exits (success = ready, failure = error).
@@ -58,7 +58,7 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 		mode = "dev"
 	}
 
-	logPath := SkaffoldLogPath(instanceName)
+	logPath := SkaffoldLogPath(instanceName, mode)
 	os.Remove(logPath) // clear previous log so tail -F starts fresh
 	lf, err := os.Create(logPath)
 	if err != nil {

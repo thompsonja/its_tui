@@ -116,6 +116,56 @@ func SkaffoldTemplate(generate func(v tui.WizardValues) (path string, profiles [
 	}
 }
 
+// SkaffoldBuildTemplate returns a StepTemplate for skaffold build.
+//
+// generate is called with the full wizard values and should return the path to
+// a skaffold.yaml and an optional list of skaffold profiles to activate.
+// Returning an empty path skips the step; returning an error aborts the wizard.
+// The wizard values include the "mode" field contributed by this template, as
+// well as any fields from other templates in the pipeline (e.g. an "env" field
+// from a companion step, or "components" from a custom selection step).
+//
+// If you need component selection, add a separate Hidden step with a
+// FieldKindSystemSelect field (see the "env" step pattern in sample/main.go).
+func SkaffoldBuildTemplate(generate func(v tui.WizardValues) (path string, profiles []string, err error)) tui.StepTemplate {
+	return tui.StepTemplate{
+		ID:    "skaffold_build",
+		Panel: tui.PanelTopRight,
+		LabelFunc: func(v tui.WizardValues) string {
+			return "Skaffold (build)"
+		},
+		WaitFor: []string{"minikube"},
+		Commands: []tui.CommandSpec{
+			{
+				Name: "status",
+				Help: "show skaffold build status",
+				Handler: func(args []string, instanceName string, values tui.WizardValues) error {
+					if instanceName == "" {
+						tui.PrintCommand("  no instance running - use: start")
+						return nil
+					}
+					tui.PrintCommand("  skaffold running in build mode")
+					tui.PrintCommand(fmt.Sprintf("  instance: %s", instanceName))
+					return nil
+				},
+			},
+		},
+		Build: func(v tui.WizardValues) (step.Step, error) {
+			if generate == nil {
+				return nil, nil
+			}
+			path, profiles, err := generate(v)
+			if err != nil {
+				return nil, err
+			}
+			if path == "" {
+				return nil, nil
+			}
+			return &SkaffoldStep{Path: path, Mode: "build", Profiles: profiles}, nil
+		},
+	}
+}
+
 // MFETemplate returns a StepTemplate for a micro-frontend runner.
 //
 // mfes is the list of available MFE names shown in the single-select picker.

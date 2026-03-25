@@ -13,8 +13,8 @@ func TestSkaffoldLogPath_UsesLogDir(t *testing.T) {
 	}
 	defer config.SetLogDir("") // restore default
 
-	path := SkaffoldLogPath("test-instance")
-	expected := filepath.Join("/custom/logs", "skaffold_test-instance.log")
+	path := SkaffoldLogPath("test-instance", "debug")
+	expected := filepath.Join("/custom/logs", "skaffold_test-instance_debug.log")
 	if path != expected {
 		t.Errorf("expected %s, got %s", expected, path)
 	}
@@ -52,7 +52,7 @@ func TestLogPath_EmptyInstanceName(t *testing.T) {
 	}
 	defer config.SetLogDir("") // restore default
 
-	if SkaffoldLogPath("") != "" {
+	if SkaffoldLogPath("", "debug") != "" {
 		t.Error("expected empty path for empty instance name")
 	}
 	if MinikubeLogPath("") != "" {
