@@ -118,6 +118,8 @@ func (m model) skaffoldPanelView() string {
 // launch.json file using 2-space indentation.
 func (m model) launchJSONString() string {
 	var lines []string
+	var configNames []string
+
 	lines = append(lines, `{`)
 	lines = append(lines, `  "version": "0.2.0",`)
 	lines = append(lines, `  "configurations": [`)
@@ -126,6 +128,14 @@ func (m model) launchJSONString() string {
 		if addr == "" {
 			addr = "127.0.0.1"
 		}
+
+		// Extract the config name for the compound
+		name := p.ResourceName
+		if name == "" {
+			name = fmt.Sprintf("port-%d", p.LocalPort)
+		}
+		configNames = append(configNames, "Attach "+name)
+
 		comma := ","
 		if i == len(m.debugPorts)-1 {
 			comma = ""
@@ -136,6 +146,26 @@ func (m model) launchJSONString() string {
 		lines = append(lines, "    }"+comma)
 	}
 	lines = append(lines, `  ]`)
+
+	// Add compound configuration to attach to all services at once
+	if len(configNames) > 1 {
+		lines = append(lines, `,`)
+		lines = append(lines, `  "compounds": [`)
+		lines = append(lines, `    {`)
+		lines = append(lines, `      "name": "Attach All",`)
+		lines = append(lines, `      "configurations": [`)
+		for i, name := range configNames {
+			comma := ","
+			if i == len(configNames)-1 {
+				comma = ""
+			}
+			lines = append(lines, fmt.Sprintf(`        "%s"%s`, name, comma))
+		}
+		lines = append(lines, `      ]`)
+		lines = append(lines, `    }`)
+		lines = append(lines, `  ]`)
+	}
+
 	lines = append(lines, `}`)
 	return strings.Join(lines, "\n")
 }

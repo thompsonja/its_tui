@@ -45,7 +45,7 @@ func (s *SkaffoldStep) sender() func(any) {
 	return step.Send
 }
 
-func (s *SkaffoldStep) ID() string                 { return "skaffold" }
+func (s *SkaffoldStep) ID() string                 { return fmt.Sprintf("skaffold_%s", s.Mode) }
 func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name, s.Mode) }
 
 // Start launches skaffold and blocks until it signals readiness:
