@@ -1,4 +1,4 @@
-package step
+package builtins
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 )
 
 // KubectlStep runs `kubectl get pods --watch` as a persistent process that watches pod changes.
@@ -26,7 +27,7 @@ func (s *KubectlStep) sender() func(any) {
 	if s.send != nil {
 		return s.send
 	}
-	return Send
+	return step.Send
 }
 
 func (s *KubectlStep) ID() string                             { return "kubectl" }
@@ -99,9 +100,9 @@ func (s *KubectlStep) pollLoop(ctx context.Context) {
 
 func (s *KubectlStep) poll() {
 	out, err := exec.Command("kubectl", "get", "pods").CombinedOutput()
-	lines := SplitLines(string(out))
+	lines := step.SplitLines(string(out))
 	if err != nil && len(lines) == 0 {
 		lines = []string{"Waiting for cluster to be ready..."}
 	}
-	s.sender()(SetMsg{ID: s.ID(), Content: lines})
+	s.sender()(step.SetMsg{ID: s.ID(), Content: lines})
 }

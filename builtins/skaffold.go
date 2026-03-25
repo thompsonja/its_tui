@@ -1,4 +1,4 @@
-package step
+package builtins
 
 import (
 	"bufio"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 	"net/http"
 	"os"
 	"os/exec"
@@ -32,7 +33,7 @@ func (s *SkaffoldStep) sender() func(any) {
 	if s.send != nil {
 		return s.send
 	}
-	return Send
+	return step.Send
 }
 
 func (s *SkaffoldStep) ID() string                 { return "skaffold" }
@@ -92,7 +93,7 @@ func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath st
 // until the first successful deploy is detected via the event stream, then
 // returns while skaffold continues running in the background.
 func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath, mode string) error {
-	port, err := RandomPort()
+	port, err := step.RandomPort()
 	if err != nil {
 		lf.Close()
 		return fmt.Errorf("finding free port: %w", err)
@@ -131,9 +132,9 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 			return // instance was stopped — suppress noise
 		}
 		if err != nil {
-			send(CommandMsg{Text: fmt.Sprintf("[skaffold exited: %v]", err)})
+			send(step.CommandMsg{Text: fmt.Sprintf("[skaffold exited: %v]", err)})
 		} else {
-			send(CommandMsg{Text: "[skaffold exited cleanly]"})
+			send(step.CommandMsg{Text: "[skaffold exited cleanly]"})
 		}
 	}()
 
@@ -231,7 +232,7 @@ func processSkaffoldEvents(ctx context.Context, port int, onDeployed func(), sen
 
 // skaffoldPortEvent parses a port-forward event from the Skaffold event stream.
 // Returns nil if the line is not a port event or cannot be parsed.
-func skaffoldPortEvent(line string) *DebugPortMsg {
+func skaffoldPortEvent(line string) *step.DebugPortMsg {
 	var env struct {
 		Result struct {
 			Event struct {
@@ -252,7 +253,7 @@ func skaffoldPortEvent(line string) *DebugPortMsg {
 	if pe.LocalPort == 0 {
 		return nil
 	}
-	return &DebugPortMsg{
+	return &step.DebugPortMsg{
 		LocalPort:    pe.LocalPort,
 		RemotePort:   pe.RemotePort,
 		ResourceName: pe.ResourceName,

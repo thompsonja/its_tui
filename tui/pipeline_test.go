@@ -5,7 +5,94 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/thompsonja/its_tui/step"
 )
+
+// ── Test template helpers ─────────────────────────────────────────────────────
+
+// These are simplified test versions of the template factories.
+// We can't use the real ones from builtins due to circular import issues.
+
+func MinikubeTemplate(args ...string) StepTemplate {
+	return StepTemplate{
+		ID:    "minikube",
+		Panel: PanelTopLeft,
+		Label: "Minikube",
+		Fields: []FieldSpec{
+			{ID: "cpu", Label: "CPU", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2", "4", "8", "16"), Default: 1},
+			{ID: "ram", Label: "RAM", Kind: FieldKindSelect, OptionsFunc: StaticOptions("2g", "4g", "8g", "16g"), Default: 1},
+		},
+		Build: func(v WizardValues) (step.Step, error) {
+			return &fakeStep{id: "minikube"}, nil
+		},
+	}
+}
+
+func KubectlTemplate() StepTemplate {
+	return StepTemplate{
+		ID:           "kubectl",
+		Panel:        PanelTopLeft,
+		Label:        "kubectl",
+		WaitFor:      []string{"minikube"},
+		AutoActivate: true,
+		Hidden:       true,
+		Build: func(v WizardValues) (step.Step, error) {
+			return &fakeStep{id: "kubectl"}, nil
+		},
+	}
+}
+
+func SkaffoldTemplate(generate func(v WizardValues) (path string, profiles []string, err error), systemsFunc ...func(WizardValues) []System) StepTemplate {
+	fields := []FieldSpec{
+		{ID: "mode", Label: "Mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("dev", "run", "debug"), Default: 0},
+	}
+
+	// If a SystemsFunc is provided, add a components field for testing
+	if len(systemsFunc) > 0 && systemsFunc[0] != nil {
+		fields = append([]FieldSpec{{
+			ID:          "components",
+			Label:       "Components",
+			Kind:        FieldKindSystemSelect,
+			SystemsFunc: systemsFunc[0],
+		}}, fields...)
+	}
+
+	return StepTemplate{
+		ID:      "skaffold",
+		Panel:   PanelTopRight,
+		Label:   "Skaffold",
+		WaitFor: []string{"minikube"},
+		Fields:  fields,
+		Build: func(v WizardValues) (step.Step, error) {
+			if generate != nil {
+				path, _, err := generate(v)
+				if err != nil || path == "" {
+					return nil, err
+				}
+			}
+			return &fakeStep{id: "skaffold"}, nil
+		},
+	}
+}
+
+func MFETemplate(mfes []string, run interface{}) StepTemplate {
+	return StepTemplate{
+		ID:    "mfe",
+		Panel: PanelBottomRight,
+		Label: "MFE",
+		Fields: []FieldSpec{
+			{ID: "mfe", Label: "MFE", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions(mfes...)},
+		},
+		Build: func(v WizardValues) (step.Step, error) {
+			mfe := v.String("mfe")
+			if mfe == "" {
+				return nil, nil
+			}
+			return &fakeStep{id: "mfe"}, nil
+		},
+	}
+}
 
 // ── fakeStep ──────────────────────────────────────────────────────────────────
 

@@ -1,9 +1,10 @@
-package step
+package builtins
 
 import (
 	"context"
 	"fmt"
 	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 	"os"
 	"os/exec"
 )
@@ -43,6 +44,6 @@ func (s *MinikubeStep) Start(ctx context.Context, instanceName string) error {
 
 // Stop runs `minikube delete`, streaming output to the minikube panel.
 func (s *MinikubeStep) Stop(ctx context.Context, _ string) error {
-	StreamToPanel(ctx, s.ID(), "minikube", "delete")
+	step.StreamToPanel(ctx, s.ID(), "minikube", "delete")
 	return nil
 }

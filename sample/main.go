@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/thompsonja/its_tui/builtins"
 	"github.com/thompsonja/its_tui/tui"
 )
 
@@ -23,8 +24,8 @@ func sampleDir() string {
 func main() {
 	cfg := tui.Config{
 		Steps: []tui.StepTemplate{
-			tui.MinikubeTemplate(),
-			tui.KubectlTemplate(),
+			builtins.MinikubeTemplate(),
+			builtins.KubectlTemplate(),
 			// env step: contributes the "env" and "api_port" selector fields to
 			// the wizard. It does not start a process of its own — the selected
 			// values are read by the skaffold generate callback below.
@@ -112,7 +113,7 @@ func main() {
 					return nil, nil
 				},
 			},
-			tui.SkaffoldTemplate(
+			builtins.SkaffoldTemplate(
 				func(v tui.WizardValues) (string, []string, error) {
 					// Generate a skaffold.yaml with the selected port and env profile.
 					// The "components" field from the step above is available in v but
@@ -125,7 +126,7 @@ func main() {
 					return generateSkaffoldYAML(sampleDir(), env, port)
 				},
 			),
-			tui.MFETemplate(
+			builtins.MFETemplate(
 				[]string{
 					"checkout-mfe",
 					"user-mfe",
@@ -135,12 +136,12 @@ func main() {
 				// RunMFE maps every MFE name to the sample mfe/ directory.
 				// The MFE calls GET /hello on the port-forwarded service and
 				// displays the message returned by the Go server.
-				func(name string, v tui.WizardValues) tui.MFECommand {
+				func(name string, v tui.WizardValues) builtins.MFECommand {
 					port := v.String("api_port")
 					if port == "" {
 						port = "9001"
 					}
-					return tui.MFECommand{
+					return builtins.MFECommand{
 						Cmd:  "node",
 						Args: []string{"index.js"},
 						Dir:  filepath.Join(sampleDir(), "mfe"),

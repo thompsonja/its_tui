@@ -1,13 +1,22 @@
-package step
+package builtins
 
 import (
 	"context"
 	"fmt"
 	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 	"os"
 	"os/exec"
 	"syscall"
 )
+
+// MFECommand describes how to run a micro-frontend.
+type MFECommand struct {
+	Cmd  string            // executable name
+	Args []string          // arguments
+	Dir  string            // working directory
+	Env  map[string]string // extra environment variables (merged with os.Environ)
+}
 
 // MFEStep runs a micro-frontend command and streams output to the MFE panel.
 // The process is placed in its own process group so SIGTERM reaches all
@@ -25,7 +34,7 @@ func (s *MFEStep) sender() func(any) {
 	if s.send != nil {
 		return s.send
 	}
-	return Send
+	return step.Send
 }
 
 func (s *MFEStep) ID() string                 { return "mfe" }
@@ -56,7 +65,7 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 		return err
 	}
 	s.pgid = cmd.Process.Pid
-	s.sender()(PIDMsg{PID: cmd.Process.Pid})
+	s.sender()(step.PIDMsg{PID: cmd.Process.Pid})
 
 	// Kill the process group when the instance context is cancelled.
 	go func() {
@@ -83,6 +92,6 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 
 // Stop sends SIGTERM to the MFE process group.
 func (s *MFEStep) Stop(_ context.Context, _ string) error {
-	KillProcessGroup(s.pgid)
+	step.KillProcessGroup(s.pgid)
 	return nil
 }

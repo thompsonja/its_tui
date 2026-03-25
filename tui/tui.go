@@ -21,13 +21,7 @@ type (
 	StepStatus     = config.StepStatus
 	StepState      = config.StepState
 
-	MFECommand = step.MFECommand
-	Step       = step.Step
-
-	MinikubeStep = step.MinikubeStep
-	KubectlStep  = step.KubectlStep
-	SkaffoldStep = step.SkaffoldStep
-	MFEStep      = step.MFEStep
+	Step = step.Step
 )
 
 // ── Function aliases ──────────────────────────────────────────────────────────
@@ -341,6 +335,14 @@ func validateTests(tests []TestTemplate) error {
 		}
 	}
 	return nil
+}
+
+// PrintCommand sends a line to the commands panel. This is exposed for use by
+// builtin step templates and custom command handlers.
+func PrintCommand(line string) {
+	if prog != nil {
+		prog.Send(commandLineMsg(line))
+	}
 }
 
 // Run starts the TUI with the given configuration. It blocks until the user
