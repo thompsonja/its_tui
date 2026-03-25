@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/thompsonja/its_tui/config"
-	"github.com/thompsonja/its_tui/step"
 	"net/http"
 	"os"
 	"os/exec"
@@ -15,7 +13,18 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 )
+
+// SkaffoldLogPath returns the per-instance log file written by skaffold.
+func SkaffoldLogPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+	return filepath.Join(config.GetLogDir(), fmt.Sprintf("skaffold_%s.log", instanceName))
+}
 
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
 // It depends on minikube being ready before Start is called.
@@ -37,7 +46,7 @@ func (s *SkaffoldStep) sender() func(any) {
 }
 
 func (s *SkaffoldStep) ID() string                 { return "skaffold" }
-func (s *SkaffoldStep) LogPath(name string) string { return config.SkaffoldLogPath(name) }
+func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name) }
 
 // Start launches skaffold and blocks until it signals readiness:
 //   - run mode: blocks until the process exits (success = ready, failure = error).
@@ -49,7 +58,7 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 		mode = "dev"
 	}
 
-	logPath := config.SkaffoldLogPath(instanceName)
+	logPath := SkaffoldLogPath(instanceName)
 	os.Remove(logPath) // clear previous log so tail -F starts fresh
 	lf, err := os.Create(logPath)
 	if err != nil {

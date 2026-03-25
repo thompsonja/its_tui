@@ -3,12 +3,22 @@ package builtins
 import (
 	"context"
 	"fmt"
-	"github.com/thompsonja/its_tui/config"
-	"github.com/thompsonja/its_tui/step"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
+
+	"github.com/thompsonja/its_tui/config"
+	"github.com/thompsonja/its_tui/step"
 )
+
+// MfeLogPath returns the per-instance log file written by the MFE process.
+func MfeLogPath(instanceName string) string {
+	if instanceName == "" {
+		return ""
+	}
+	return filepath.Join(config.GetLogDir(), fmt.Sprintf("mfe_%s.log", instanceName))
+}
 
 // MFECommand describes how to run a micro-frontend.
 type MFECommand struct {
@@ -38,12 +48,12 @@ func (s *MFEStep) sender() func(any) {
 }
 
 func (s *MFEStep) ID() string                 { return "mfe" }
-func (s *MFEStep) LogPath(name string) string { return config.MfeLogPath(name) }
+func (s *MFEStep) LogPath(name string) string { return MfeLogPath(name) }
 
 // Start launches the MFE command and returns once the process is running.
 // The process runs in the background and is killed when ctx is cancelled.
 func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
-	lf, err := os.Create(config.MfeLogPath(instanceName))
+	lf, err := os.Create(MfeLogPath(instanceName))
 	if err != nil {
 		return fmt.Errorf("log create: %w", err)
 	}

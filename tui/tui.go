@@ -355,9 +355,14 @@ func Run(cfg Config) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	// Configure log directory (defaults to /tmp if not specified)
+	// Configure log directory (defaults to ~/.tui/logs if not specified)
 	if err := config.SetLogDir(cfg.LogDir); err != nil {
 		return fmt.Errorf("invalid log directory: %w", err)
+	}
+
+	// Ensure log directory exists
+	if err := config.EnsureLogDir(); err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 
 	statePath := DefaultStatePath()
@@ -445,7 +450,7 @@ func Run(cfg Config) error {
 			}
 			id := def.Step.ID()
 			if e, ok := m.stepCtxs[id]; ok {
-				go watchStep(e.ctx, def, restoreName)
+				go step.WatchStep(e.ctx, def.Step, restoreName)
 			}
 		}
 
