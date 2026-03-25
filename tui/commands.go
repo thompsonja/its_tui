@@ -149,7 +149,7 @@ func (m *model) dispatchCommand(line string) {
 		// Truncate log file if any.
 		if lp := def.Step.LogPath(name); lp != "" {
 			_ = os.Truncate(lp, 0)
-			go watchStep(stepCtx, def, name)
+			go step.WatchStep(stepCtx, def.Step, name)
 		}
 		// Re-register spinner and start the step.
 		m.startStep(id, def.effectiveLabel())
