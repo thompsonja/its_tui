@@ -9,6 +9,7 @@ import (
 
 	"github.com/thompsonja/its_tui/config"
 	"github.com/thompsonja/its_tui/step"
+	"github.com/thompsonja/its_tui/tui"
 )
 
 // MinikubeLogPath returns the per-instance log file written by minikube start.
@@ -56,4 +57,30 @@ func (s *MinikubeStep) Start(ctx context.Context, instanceName string) error {
 func (s *MinikubeStep) Stop(ctx context.Context, _ string) error {
 	step.StreamToPanel(ctx, s.ID(), "minikube", "delete")
 	return nil
+}
+
+// MinikubeTemplate returns a StepTemplate for starting a minikube cluster.
+// It contributes CPU and RAM selector fields to the wizard.
+// Additional args can be passed to minikube start command via the args parameter.
+func MinikubeTemplate(args ...string) tui.StepTemplate {
+	return tui.StepTemplate{
+		ID:    "minikube",
+		Panel: tui.PanelTopLeft,
+		Label: "Minikube",
+		Fields: []tui.FieldSpec{
+			{ID: "cpu", Label: "CPU", Kind: tui.FieldKindSelect, OptionsFunc: tui.StaticOptions("2", "4", "8", "16"), Default: 1},
+			{ID: "ram", Label: "RAM", Kind: tui.FieldKindSelect, OptionsFunc: tui.StaticOptions("2g", "4g", "8g", "16g"), Default: 1},
+		},
+		Build: func(v tui.WizardValues) (step.Step, error) {
+			cpu := v.String("cpu")
+			if cpu == "" {
+				cpu = "4"
+			}
+			ram := v.String("ram")
+			if ram == "" {
+				ram = "4g"
+			}
+			return &MinikubeStep{CPU: cpu, RAM: ram, Args: args}, nil
+		},
+	}
 }

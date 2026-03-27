@@ -34,20 +34,26 @@ func StreamCmd(ctx context.Context, cmd *exec.Cmd, emit func(string)) {
 }
 
 func streamCmd(ctx context.Context, cmd *exec.Cmd, emit func(string)) {
+	stepDebugLog("streamCmd: starting command: %v", cmd.Args)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		stepDebugLog("streamCmd: stdout pipe error: %v", err)
 		emit(fmt.Sprintf("stdout pipe error: %v", err))
 		return
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stepDebugLog("streamCmd: stderr pipe error: %v", err)
 		emit(fmt.Sprintf("stderr pipe error: %v", err))
 		return
 	}
+	stepDebugLog("streamCmd: starting process")
 	if err := cmd.Start(); err != nil {
+		stepDebugLog("streamCmd: start error: %v", err)
 		emit(fmt.Sprintf("start error: %v", err))
 		return
 	}
+	stepDebugLog("streamCmd: process started, setting up scanners")
 
 	go func() {
 		s := bufio.NewScanner(stdout)
@@ -61,12 +67,16 @@ func streamCmd(ctx context.Context, cmd *exec.Cmd, emit func(string)) {
 		emit(s.Text())
 	}
 
+	stepDebugLog("streamCmd: waiting for process to exit")
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
+			stepDebugLog("streamCmd: process killed by context cancellation")
 			return // killed by context cancellation — don't report
 		}
+		stepDebugLog("streamCmd: process exited with error: %v", err)
 		emit(fmt.Sprintf("[exited: %v]", err))
 	} else {
+		stepDebugLog("streamCmd: process exited cleanly")
 		emit("[process exited cleanly]")
 	}
 }

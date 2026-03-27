@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -348,26 +349,42 @@ func PrintCommand(line string) {
 // Run starts the TUI with the given configuration. It blocks until the user
 // exits and returns any error from the bubbletea runtime.
 func Run(cfg Config) error {
+	// Initialize debug logging first
+	if err := initDebugLog(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to initialize debug log: %v\n", err)
+	}
+	defer closeDebugLog()
+
+	debugLog("Run: starting with config: InstanceName=%q, Steps=%d, Tests=%d",
+		cfg.InstanceName, len(cfg.Steps), len(cfg.Tests))
+
 	if err := validateTemplates(cfg.Steps); err != nil {
+		debugLog("Run: template validation failed: %v", err)
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	if err := validateTests(cfg.Tests); err != nil {
+		debugLog("Run: test validation failed: %v", err)
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
 	// Configure log directory (defaults to ~/.tui/logs if not specified)
 	if err := config.SetLogDir(cfg.LogDir); err != nil {
+		debugLog("Run: failed to set log directory: %v", err)
 		return fmt.Errorf("invalid log directory: %w", err)
 	}
 
 	// Ensure log directory exists
 	if err := config.EnsureLogDir(); err != nil {
+		debugLog("Run: failed to create log directory: %v", err)
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}
+	debugLog("Run: log directory set to: %s", config.GetLogDir())
 
 	statePath := DefaultStatePath()
+	debugLog("Run: loading state from: %s", statePath)
 	state, _ := LoadState(statePath)
 
+	debugLog("Run: creating model")
 	m := newModel(cfg)
 	m.statePath = statePath
 
@@ -426,10 +443,12 @@ func Run(cfg Config) error {
 		}
 	}
 
+	debugLog("Run: creating bubbletea program")
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	prog = p
 	sender := func(msg any) { p.Send(msg) }
 	step.SetSender(sender)
+	debugLog("Run: program created, sender configured")
 
 	// Inject sender into restored steps for per-step testability.
 	for _, def := range restoreDefs {
@@ -441,6 +460,7 @@ func Run(cfg Config) error {
 	// Restore the instance using executeStartWithResume to properly handle step states.
 	// This checks saved state for each step and skips/retries/restarts as appropriate.
 	if len(restoreDefs) > 0 && state.Instance != nil && state.Instance.StepStates != nil {
+		debugLog("Run: restoring session with %d steps", len(restoreDefs))
 		m.executeStartWithResume(restoreDefs, state.Instance.StepStates)
 
 		// Start watchers for all steps with visible panels.
@@ -461,8 +481,11 @@ func Run(cfg Config) error {
 		}()
 	}
 
+	debugLog("Run: starting bubbletea program")
 	if _, err := p.Run(); err != nil {
+		debugLog("Run: program exited with error: %v", err)
 		return err
 	}
+	debugLog("Run: program exited normally")
 	return nil
 }

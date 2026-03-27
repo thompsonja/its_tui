@@ -13,21 +13,28 @@ import (
 // executeStartFromWizard handles the start command initiated from the wizard.
 // It builds the pipeline from wizard selections and starts execution.
 func (m *model) executeStartFromWizard() {
+	debugLog("executeStartFromWizard: called")
 	wiz := m.wizard
 	if wiz == nil {
+		debugLog("executeStartFromWizard: wizard not initialized")
 		m.printLine("  internal error: wizard not initialized")
 		return
 	}
 	sp := m.statePath
 	name := m.configuredName()
 
+	debugLog("executeStartFromWizard: instance name=%q, statePath=%q", name, sp)
 	m.printLine("$ start")
+	debugLog("executeStartFromWizard: building wizard values")
 	values := wiz.buildValues()
+	debugLog("executeStartFromWizard: wizard values built, building defs from templates")
 	defs, err := m.buildDefsFromTemplates(values)
 	if err != nil {
-		prog.Send(commandLineMsg("error: " + err.Error()))
+		debugLog("executeStartFromWizard: buildDefsFromTemplates failed: %v", err)
+		m.printLine(fmt.Sprintf("  error: %v", err))
 		return
 	}
+	debugLog("executeStartFromWizard: built %d step definitions", len(defs))
 	// Inject message sender into steps that support it, so they can be
 	// tested without the global Send and send messages via prog.
 	for _, def := range defs {
@@ -151,6 +158,7 @@ func notifyDependentsOfFailure(defs []StepDef, failedID string) {
 // executeStart launches all step processes with dependency ordering.
 // Steps with WaitFor set block until their dependency signals ready.
 func (m *model) executeStart(defs []StepDef) {
+	debugLog("executeStart: launching %d steps", len(defs))
 	// Capture instanceCtx by value now to prevent a race if the global is
 	// reassigned (stop/switch) while dep-waiting goroutines are still running.
 	ctx := instanceCtx
@@ -158,6 +166,7 @@ func (m *model) executeStart(defs []StepDef) {
 	m.steps = map[string]*commandStep{}
 	m.stepCtxs = make(map[string]stepEntry)
 	name := m.instanceName
+	debugLog("executeStart: instance name=%q", name)
 
 	// Initialize startup tracking
 	m.completedSteps = 0
@@ -196,9 +205,12 @@ func (m *model) executeStart(defs []StepDef) {
 		id := def.Step.ID()
 		stepCtx := m.stepCtxs[id].ctx
 		go func() {
+			debugLog("executeStart: step %q: waiting for dependencies: %v", id, def.meta.waitFor)
 			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+				debugLog("executeStart: step %q: dependency wait cancelled", id)
 				return
 			}
+			debugLog("executeStart: step %q: dependencies ready, starting", id)
 			if len(def.meta.waitFor) > 0 {
 				// Activate this step (triggers spinner + AutoActivate if set).
 				prog.Send(stepActivateMsg{id: id})
@@ -209,7 +221,9 @@ func (m *model) executeStart(defs []StepDef) {
 			_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
 
 			// Start the step.
+			debugLog("executeStart: step %q: calling Start()", id)
 			if err := def.Step.Start(stepCtx, name); err != nil {
+				debugLog("executeStart: step %q: Start() failed: %v", id, err)
 				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)
@@ -224,6 +238,7 @@ func (m *model) executeStart(defs []StepDef) {
 			}
 
 			// Mark step as completed
+			debugLog("executeStart: step %q: Start() completed successfully", id)
 			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
 			close(ready[id])
 			if def.meta.onReady != nil {
@@ -238,6 +253,7 @@ func (m *model) executeStart(defs []StepDef) {
 			}
 		}()
 	}
+	debugLog("executeStart: all step goroutines launched")
 }
 
 // executeStartWithResume launches step processes with resume logic based on saved state.

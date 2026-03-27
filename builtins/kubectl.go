@@ -11,6 +11,7 @@ import (
 
 	"github.com/thompsonja/its_tui/config"
 	"github.com/thompsonja/its_tui/step"
+	"github.com/thompsonja/its_tui/tui"
 )
 
 // KubectlStep runs `kubectl get pods --watch` as a persistent process that watches pod changes.
@@ -105,4 +106,21 @@ func (s *KubectlStep) poll() {
 		lines = []string{"Waiting for cluster to be ready..."}
 	}
 	s.sender()(step.SetMsg{ID: s.ID(), Content: lines})
+}
+
+// KubectlTemplate returns a StepTemplate for the kubectl pod watcher.
+// It has no wizard fields: it starts automatically after minikube is ready
+// and auto-activates its panel.
+func KubectlTemplate() tui.StepTemplate {
+	return tui.StepTemplate{
+		ID:           "kubectl",
+		Panel:        tui.PanelTopLeft,
+		Label:        "kubectl",
+		WaitFor:      []string{"minikube"},
+		AutoActivate: true,
+		Hidden:       true,
+		Build: func(v tui.WizardValues) (step.Step, error) {
+			return &KubectlStep{StatePath: config.DefaultStatePath()}, nil
+		},
+	}
 }

@@ -612,6 +612,14 @@ The Commands panel accepts typed commands:
 | `theme <name>`       | Switch color theme; persisted across sessions |
 | `help`               | Open the keyboard reference card |
 
+**Debug Logging**: The TUI automatically writes detailed debug logs to `~/.tui/debug.log`. This includes:
+- TUI initialization and configuration
+- Step execution lifecycle (start, dependencies, completion)
+- Log file watching and command streaming
+- Errors and warnings
+
+Check this file if the application freezes or behaves unexpectedly.
+
 Steps can also contribute **custom commands** via `StepTemplate.Commands` (see [Custom Commands](#custom-commands)).
 
 Command history is navigated with `↑` / `↓` in the Commands panel.

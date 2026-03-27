@@ -73,16 +73,20 @@ type Resumer interface {
 func WatchStep(ctx context.Context, s Step, instanceName string) {
 	logPath := s.LogPath(instanceName)
 	if logPath == "" {
+		stepDebugLog("WatchStep: step %q has no log path, skipping", s.ID())
 		return
 	}
 	id := s.ID()
+	stepDebugLog("WatchStep: step %q starting tail on %q", id, logPath)
 	cmd := exec.CommandContext(ctx, "tail", "-F", "-n", "50", logPath)
 	streamCmd(ctx, cmd, func(line string) {
 		if strings.HasPrefix(line, "tail: ") {
+			stepDebugLog("WatchStep: step %q: tail message: %s", id, line)
 			return
 		}
 		Send(LineMsg{ID: id, Line: line})
 	})
+	stepDebugLog("WatchStep: step %q tail exited", id)
 }
 
 // ResumeStep handles session restore for steps based on their previous state.

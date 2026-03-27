@@ -86,14 +86,24 @@ func determineResumeAction(stepID string, savedState map[string]StepState) Resum
 // On error it returns the error; callers that want best-effort (session restore)
 // can ignore it.
 func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
+	debugLog("buildDefsFromTemplates: starting with %d templates", len(m.cfg.Steps))
 	sp := m.statePath
 	var defs []StepDef
 
 	// Clear and rebuild command registry
 	m.customCommands = make(map[string]CommandSpec)
 
-	for _, tmpl := range m.cfg.Steps {
+	for i, tmpl := range m.cfg.Steps {
+		templateLabel := tmpl.Label
+		if templateLabel == "" {
+			templateLabel = tmpl.ID
+		}
+		if templateLabel == "" {
+			templateLabel = fmt.Sprintf("template[%d]", i)
+		}
+		debugLog("buildDefsFromTemplates: building template %d: %q", i, templateLabel)
 		s, err := tmpl.Build(values)
+		debugLog("buildDefsFromTemplates: template %d (%q) Build() returned", i, templateLabel)
 		if err != nil {
 			label := tmpl.Label
 			if label == "" {

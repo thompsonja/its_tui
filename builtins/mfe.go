@@ -10,6 +10,7 @@ import (
 
 	"github.com/thompsonja/its_tui/config"
 	"github.com/thompsonja/its_tui/step"
+	"github.com/thompsonja/its_tui/tui"
 )
 
 // MfeLogPath returns the per-instance log file written by the MFE process.
@@ -33,7 +34,7 @@ type MFECommand struct {
 // child processes (e.g. node workers spawned by npm).
 type MFEStep struct {
 	Cmd  MFECommand
-	pgid int      // set by Start; used by Stop
+	pgid int       // set by Start; used by Stop
 	send func(any) // injected sender; falls back to global Send
 }
 
@@ -104,4 +105,37 @@ func (s *MFEStep) Start(ctx context.Context, instanceName string) error {
 func (s *MFEStep) Stop(_ context.Context, _ string) error {
 	step.KillProcessGroup(s.pgid)
 	return nil
+}
+
+// MFETemplate returns a StepTemplate for a micro-frontend runner.
+//
+// mfes is the list of available MFE names shown in the single-select picker.
+// run is called with the selected MFE name and the full wizard values (so port
+// fields or other selections can be read); if nil, defaults to "npm start" in
+// the MFE name directory.
+func MFETemplate(mfes []string, run func(name string, v tui.WizardValues) MFECommand) tui.StepTemplate {
+	return tui.StepTemplate{
+		ID:    "mfe",
+		Panel: tui.PanelBottomRight,
+		Label: "MFE",
+		Fields: []tui.FieldSpec{
+			{ID: "mfe", Label: "MFE", Kind: tui.FieldKindSingleSelect, OptionsFunc: tui.StaticOptions(mfes...)},
+		},
+		Build: func(v tui.WizardValues) (step.Step, error) {
+			mfe := v.String("mfe")
+			if mfe == "" {
+				return nil, nil
+			}
+			var cmd MFECommand
+			if run != nil {
+				cmd = run(mfe, v)
+			} else {
+				cmd = MFECommand{Cmd: "npm", Args: []string{"start"}, Dir: mfe}
+			}
+			if cmd.Cmd == "" {
+				return nil, nil
+			}
+			return &MFEStep{Cmd: cmd}, nil
+		},
+	}
 }
