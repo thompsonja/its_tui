@@ -161,6 +161,31 @@ func TestBuildDefsFromTemplates_ErrorIncludesLabel(t *testing.T) {
 	}
 }
 
+func TestBuildDefsFromTemplates_RejectsDuplicateStepIDs(t *testing.T) {
+	m := &model{cfg: Config{Steps: []StepTemplate{
+		{
+			Label: "first",
+			Build: fakeBuild("duplicate-id", nil),
+		},
+		{
+			Label: "second",
+			Build: fakeBuild("duplicate-id", nil),
+		},
+	}}}
+	_, err := m.buildDefsFromTemplates(WizardValues{})
+	if err == nil {
+		t.Fatal("expected error for duplicate step IDs, got nil")
+	}
+	// Error should mention both labels and the duplicate ID.
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "duplicate-id") {
+		t.Fatalf("error should mention duplicate ID, got: %v", err)
+	}
+	if !strings.Contains(errMsg, "first") || !strings.Contains(errMsg, "second") {
+		t.Fatalf("error should mention both step labels, got: %v", err)
+	}
+}
+
 func TestBuildDefsFromTemplates_UsesLabelFunc(t *testing.T) {
 	m := &model{cfg: Config{Steps: []StepTemplate{{
 		Label:     "base",

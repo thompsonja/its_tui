@@ -22,6 +22,10 @@ func sampleDir() string {
 }
 
 func main() {
+	// Shared skaffold config: the generator populates this, and both the
+	// build and dev steps read from it.
+	skaffoldCfg := &builtins.SkaffoldConfig{}
+
 	cfg := tui.Config{
 		Steps: []tui.StepTemplate{
 			builtins.MinikubeTemplate(),
@@ -113,7 +117,11 @@ func main() {
 					return nil, nil
 				},
 			},
-			builtins.SkaffoldTemplate(
+			// Skaffold file generator: generates the skaffold.yaml once and
+			// populates skaffoldCfg with the path and profiles. This allows
+			// both the build and dev steps below to use the same file without
+			// generating it twice.
+			builtins.SkaffoldFileGeneratorTemplate(skaffoldCfg,
 				func(v tui.WizardValues) (string, []string, error) {
 					// Generate a skaffold.yaml with the selected port and env profile.
 					// The "components" field from the step above is available in v but
@@ -126,6 +134,10 @@ func main() {
 					return generateSkaffoldYAML(sampleDir(), env, port)
 				},
 			),
+			// Skaffold build step: runs `skaffold build` using the generated config
+			builtins.SkaffoldBuildTemplateFrom(skaffoldCfg),
+			// Skaffold dev step: runs `skaffold dev/run/debug` using the generated config
+			builtins.SkaffoldTemplateFrom(skaffoldCfg),
 			builtins.MFETemplate(
 				[]string{
 					"checkout-mfe",
