@@ -13,14 +13,14 @@ func generateSkaffoldYAML(dir, env, localPort string) (path string, profiles []s
 	content := fmt.Sprintf(`apiVersion: skaffold/v4beta11
 kind: Config
 metadata:
-  name: hello-world
+  name: hello-go
 
 build:
   artifacts:
-    - image: hello-world
-      docker:
-        dockerfile: Dockerfile
-      context: .
+    - image: hello-go
+      ko:
+        main: .
+      context: server
 
 manifests:
   rawYaml:
@@ -29,7 +29,7 @@ manifests:
 
 portForward:
   - resourceType: Service
-    resourceName: hello-world
+    resourceName: hello-go
     port: 8080
     localPort: %s
 

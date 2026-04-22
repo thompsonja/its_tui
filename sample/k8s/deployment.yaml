@@ -1,20 +1,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: hello-world
+  name: hello-go
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: hello-world
+      app: hello-go
   template:
     metadata:
       labels:
-        app: hello-world
+        app: hello-go
     spec:
       containers:
-        - name: hello-world
-          image: hello-world
+        - name: hello-go
+          image: hello-go
           env:
             - name: APP_ENV
               value: dev

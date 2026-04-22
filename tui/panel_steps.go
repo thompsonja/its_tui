@@ -94,7 +94,9 @@ func (m *model) finishStep(id string, ok bool, label string) {
 		if m.completedSteps == m.totalSteps && m.totalSteps > 0 {
 			sp := m.statePath
 			go func() {
-				_ = MarkReady(sp)
+				if err := MarkReady(sp); err != nil {
+					debugLog("finishStep: MarkReady: %v", err)
+				}
 				// Send message to display startup time
 				prog.Send(allStepsReadyMsg{})
 			}()

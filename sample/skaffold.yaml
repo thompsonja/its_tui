@@ -1,15 +1,14 @@
 apiVersion: skaffold/v4beta11
 kind: Config
 metadata:
-  name: hello-world
+  name: hello-go
 
 build:
   artifacts:
-    - image: hello-world
-      docker:
-        dockerfile: Dockerfile
-      # context is the directory containing this skaffold.yaml
-      context: .
+    - image: hello-go
+      ko:
+        main: .
+      context: server
 
 manifests:
   rawYaml:
@@ -18,7 +17,7 @@ manifests:
 
 portForward:
   - resourceType: Service
-    resourceName: hello-world
+    resourceName: hello-go
     port: 8080
     localPort: 9001
 

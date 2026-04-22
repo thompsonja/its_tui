@@ -1,9 +1,10 @@
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
 COPY server/ .
-RUN CGO_ENABLED=0 GOOS=linux go build -o server .
+ARG SKAFFOLD_GO_GCFLAGS
+RUN CGO_ENABLED=0 GOOS=linux go build -gcflags="${SKAFFOLD_GO_GCFLAGS}" -o server .
 
-FROM alpine:latest
+FROM gcr.io/distroless/base-debian12
 COPY --from=builder /build/server /server
 EXPOSE 8080
-CMD ["/server"]
+ENTRYPOINT ["/server"]

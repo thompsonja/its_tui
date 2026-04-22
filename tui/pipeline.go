@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/thompsonja/its_tui/config"
 )
@@ -63,15 +62,10 @@ const (
 func determineResumeAction(stepID string, savedState map[string]StepState) ResumeAction {
 	ss, exists := savedState[stepID]
 	if !exists {
-		fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: not found in saved state\n", stepID)
 		return ResumeActionStart
 	}
-
-	fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: status=%s\n", stepID, ss.Status)
-
 	switch ss.Status {
 	case config.StepStatusCompleted:
-		fmt.Fprintf(os.Stderr, "[DEBUG determineResumeAction] step %s: returning ResumeActionSkip\n", stepID)
 		return ResumeActionSkip
 	case config.StepStatusFailed:
 		return ResumeActionRetry

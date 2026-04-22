@@ -193,6 +193,20 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 // Stop is a no-op: skaffold is terminated when the instance context is cancelled.
 func (s *SkaffoldStep) Stop(_ context.Context, _ string) error { return nil }
 
+// Resume implements step.Resumer. For run and build modes the work is already
+// done and the results persist in the cluster or registry, so we skip the step.
+// For dev and debug modes skaffold is a live-reload watcher that must be
+// restarted whenever the TUI starts — returning an error causes the caller to
+// call Start() again.
+func (s *SkaffoldStep) Resume(_ context.Context, _ string) error {
+	switch s.Mode {
+	case "run", "build":
+		return nil // deployment / images already exist; nothing to do
+	default:
+		return fmt.Errorf("skaffold %s restarted", s.Mode)
+	}
+}
+
 // processSkaffoldEvents connects to the Skaffold HTTP event stream and reads
 // it until ctx is cancelled. It calls onDeployed when the first deploy-complete
 // event is seen, and sends a DebugPortMsg for each port-forward event.

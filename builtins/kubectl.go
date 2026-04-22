@@ -77,7 +77,9 @@ func (s *KubectlStep) Start(ctx context.Context, instanceName string) error {
 
 	// Save a marker PID (our own process) to indicate kubectl is active
 	if s.StatePath != "" {
-		_ = config.SaveStepData(s.StatePath, s.ID(), "pid", strconv.Itoa(os.Getpid()))
+		if err := config.SaveStepData(s.StatePath, s.ID(), "pid", strconv.Itoa(os.Getpid())); err != nil {
+			step.DebugLog("kubectl: SaveStepData pid: %v", err)
+		}
 	}
 
 	go s.pollLoop(ctx)

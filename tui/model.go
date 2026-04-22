@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"strings"
 	"time"
 
@@ -62,6 +63,7 @@ type model struct {
 	cfg          Config // library configuration provided by the caller
 	instanceName string // name of the currently running instance; "" when stopped
 	statePath    string // path to state.json
+	workspaceDir string // directory containing .vscode for launch.json management
 
 	// Content panels: index by PanelID (0=TopLeft, 1=TopRight, 2=BottomRight).
 	panels   [3]panelView
@@ -158,8 +160,14 @@ func newModel(cfg Config) model {
 	si.Placeholder = "search..."
 	si.CharLimit = 128
 
+	workspaceDir := cfg.WorkspaceDir
+	if workspaceDir == "" {
+		workspaceDir, _ = os.Getwd()
+	}
+
 	return model{
 		cfg:                cfg,
+		workspaceDir:       workspaceDir,
 		focused:            panelCommands,
 		input:              ti,
 		searchInput:        si,

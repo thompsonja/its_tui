@@ -91,7 +91,9 @@ func (m *model) executeStartFromWizard() {
 		// Fresh start: truncate logs and start all steps
 		for _, def := range defs {
 			if lp := def.Step.LogPath(name); lp != "" {
-				_ = os.Truncate(lp, 0)
+				if err := os.Truncate(lp, 0); err != nil {
+					debugLog("executeStartFromWizard: truncate log %q: %v", lp, err)
+				}
 			}
 		}
 		m.executeStart(defs)
@@ -218,13 +220,17 @@ func (m *model) executeStart(defs []StepDef) {
 
 			// Mark step as running
 			sp := m.statePath
-			_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+			if err := UpdateStepState(sp, id, config.StepStatusRunning, nil); err != nil {
+				debugLog("executeStart: step %q: UpdateStepState running: %v", id, err)
+			}
 
 			// Start the step.
 			debugLog("executeStart: step %q: calling Start()", id)
 			if err := def.Step.Start(stepCtx, name); err != nil {
 				debugLog("executeStart: step %q: Start() failed: %v", id, err)
-				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
+				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
+					debugLog("executeStart: step %q: UpdateStepState failed: %v", id, stateErr)
+				}
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
@@ -239,7 +245,9 @@ func (m *model) executeStart(defs []StepDef) {
 
 			// Mark step as completed
 			debugLog("executeStart: step %q: Start() completed successfully", id)
-			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
+			if err := UpdateStepState(sp, id, config.StepStatusCompleted, nil); err != nil {
+				debugLog("executeStart: step %q: UpdateStepState completed: %v", id, err)
+			}
 			close(ready[id])
 			if def.meta.onReady != nil {
 				go def.meta.onReady()
@@ -344,7 +352,9 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				err = step.ResumeStep(stepCtx, def.Step, name, true)
 				if err != nil {
 					// Resume failed, need to restart - mark as running and call Start()
-					_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+					if stateErr := UpdateStepState(sp, id, config.StepStatusRunning, nil); stateErr != nil {
+						debugLog("executeStartWithResume: step %q: UpdateStepState running: %v", id, stateErr)
+					}
 					err = def.Step.Start(stepCtx, name)
 				} else {
 					// Resume succeeded - step stays in Completed state
@@ -356,23 +366,31 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				// Truncate log if restarting a previously-running step
 				if action == ResumeActionRestart {
 					if lp := def.Step.LogPath(name); lp != "" {
-						_ = os.Truncate(lp, 0)
+						if truncErr := os.Truncate(lp, 0); truncErr != nil {
+							debugLog("executeStartWithResume: step %q: truncate log %q: %v", id, lp, truncErr)
+						}
 					}
 				}
 
 				// Clear error for retry
 				if action == ResumeActionRetry {
-					_ = UpdateStepState(sp, id, config.StepStatusPending, nil)
+					if stateErr := UpdateStepState(sp, id, config.StepStatusPending, nil); stateErr != nil {
+						debugLog("executeStartWithResume: step %q: UpdateStepState pending: %v", id, stateErr)
+					}
 				}
 
 				// Mark step as running and start/restart it
-				_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+				if stateErr := UpdateStepState(sp, id, config.StepStatusRunning, nil); stateErr != nil {
+					debugLog("executeStartWithResume: step %q: UpdateStepState running: %v", id, stateErr)
+				}
 				err = def.Step.Start(stepCtx, name)
 			}
 
 			// Handle error from Start() or ResumeStep()
 			if err != nil {
-				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
+				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
+					debugLog("executeStartWithResume: step %q: UpdateStepState failed: %v", id, stateErr)
+				}
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
@@ -387,7 +405,9 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 
 			// Mark step as completed (skip if already completed from successful resume)
 			if !wasAlreadyCompleted {
-				_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
+				if stateErr := UpdateStepState(sp, id, config.StepStatusCompleted, nil); stateErr != nil {
+					debugLog("executeStartWithResume: step %q: UpdateStepState completed: %v", id, stateErr)
+				}
 			}
 			close(ready[id])
 			if def.meta.onReady != nil {

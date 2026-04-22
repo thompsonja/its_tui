@@ -19,7 +19,11 @@ func (m *model) dispatchCommand(line string) {
 		return
 	}
 	sp := m.statePath
-	go func() { _ = AppendCommandHistory(sp, line) }()
+	go func() {
+		if err := AppendCommandHistory(sp, line); err != nil {
+			debugLog("AppendCommandHistory: %v", err)
+		}
+	}()
 	switch parts[0] {
 	case "help":
 		m.overlay = overlayHelp
@@ -37,6 +41,7 @@ func (m *model) dispatchCommand(line string) {
 
 	case "stop":
 		name := m.instanceName
+		workspaceDir := m.workspaceDir
 		m.printLine("$ stop")
 		if name == "" {
 			m.printLine("  no active instance — run: start")
@@ -101,11 +106,20 @@ func (m *model) dispatchCommand(line string) {
 			}
 			// Stop steps in reverse order.
 			for _, t := range stopTasks {
-				_ = t.step.Stop(context.Background(), name)
-				prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
+				if err := t.step.Stop(context.Background(), name); err != nil {
+					prog.Send(stepDoneMsg{id: t.id, ok: false, label: t.label + " failed: " + err.Error()})
+				} else {
+					prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
+				}
+			}
+			// Remove TUI-managed debug configs from .vscode/launch.json.
+			if err := removeVSCodeLaunchConfigs(workspaceDir, name); err != nil {
+				prog.Send(commandLineMsg(fmt.Sprintf("  warning: failed to update .vscode/launch.json: %v", err)))
 			}
 			prog.Send(cmdActiveMsg(-1))
-			_ = MarkInactive(sp)
+			if err := MarkInactive(sp); err != nil {
+				debugLog("MarkInactive: %v", err)
+			}
 			prog.Send(instanceStoppedMsg{})
 			prog.Send(clearActiveDefsMsg{})
 		}()
@@ -145,22 +159,32 @@ func (m *model) dispatchCommand(line string) {
 		}
 		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 		// Clear step state before restart
-		_ = UpdateStepState(sp, id, config.StepStatusPending, nil)
+		if err := UpdateStepState(sp, id, config.StepStatusPending, nil); err != nil {
+			debugLog("restart: UpdateStepState %q pending: %v", id, err)
+		}
 		// Truncate log file if any.
 		if lp := def.Step.LogPath(name); lp != "" {
-			_ = os.Truncate(lp, 0)
+			if err := os.Truncate(lp, 0); err != nil {
+				debugLog("restart: truncate log %q: %v", lp, err)
+			}
 			go step.WatchStep(stepCtx, def.Step, name)
 		}
 		// Re-register spinner and start the step.
 		m.startStep(id, def.effectiveLabel())
 		go func() {
-			_ = UpdateStepState(sp, id, config.StepStatusRunning, nil)
+			if err := UpdateStepState(sp, id, config.StepStatusRunning, nil); err != nil {
+				debugLog("restart: UpdateStepState %q running: %v", id, err)
+			}
 			if err := def.Step.Start(stepCtx, name); err != nil {
-				_ = UpdateStepState(sp, id, config.StepStatusFailed, err)
+				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
+					debugLog("restart: UpdateStepState %q failed: %v", id, stateErr)
+				}
 				prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
 				return
 			}
-			_ = UpdateStepState(sp, id, config.StepStatusCompleted, nil)
+			if err := UpdateStepState(sp, id, config.StepStatusCompleted, nil); err != nil {
+				debugLog("restart: UpdateStepState %q completed: %v", id, err)
+			}
 			prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 		}()
 
@@ -331,7 +355,11 @@ func (m *model) dispatchCommand(line string) {
 					m.helpOverlayVP.SetContent(m.helpContent(m.helpOverlayVP.Width))
 					m.printLine("theme set to: " + name)
 					found = true
-					go func() { _ = SaveTheme(sp, name) }()
+					go func() {
+					if err := SaveTheme(sp, name); err != nil {
+						debugLog("SaveTheme %q: %v", name, err)
+					}
+				}()
 					break
 				}
 			}

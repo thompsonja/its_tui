@@ -123,7 +123,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case step.PIDMsg:
 		sp := m.statePath
 		pgid := msg.PID
-		go func() { _ = SaveMFEPGID(sp, pgid) }()
+		go func() {
+			if err := SaveMFEPGID(sp, pgid); err != nil {
+				debugLog("SaveMFEPGID: %v", err)
+			}
+		}()
 
 	case step.DebugPortMsg:
 		if isDebugPortName(msg.PortName) {
@@ -154,7 +158,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Address:      p.Address,
 			}
 		}
-		go func() { _ = config.SavePorts(sp, fwdPorts, dbgPorts) }()
+		go func() {
+			if err := config.SavePorts(sp, fwdPorts, dbgPorts); err != nil {
+				debugLog("SavePorts: %v", err)
+			}
+		}()
+		if isDebugPortName(msg.PortName) {
+			// Snapshot current debug ports and update .vscode/launch.json.
+			ports := append([]step.DebugPortMsg(nil), m.debugPorts...)
+			instanceName := m.instanceName
+			workspaceDir := m.workspaceDir
+			go func() {
+				if err := updateVSCodeLaunchJSON(workspaceDir, instanceName, ports); err != nil {
+					prog.Send(commandLineMsg(fmt.Sprintf("  warning: failed to update .vscode/launch.json: %v", err)))
+				}
+			}()
+		}
 
 	case copyResultMsg:
 		m.flashMsg = msg.msg
@@ -206,7 +225,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepDepFailedMsg:
 		sp := m.statePath
 		m.printLine(fmt.Sprintf("  ⚠ warning: %s dependency %s failed, skipping", msg.id, msg.failedDep))
-		_ = UpdateStepState(sp, msg.id, config.StepStatusSkipped, fmt.Errorf("dependency %s failed", msg.failedDep))
+		if err := UpdateStepState(sp, msg.id, config.StepStatusSkipped, fmt.Errorf("dependency %s failed", msg.failedDep)); err != nil {
+			debugLog("UpdateStepState %q skipped: %v", msg.id, err)
+		}
 		m.finishStep(msg.id, false, msg.id+" skipped (dependency failed)")
 
 	case stepActivateMsg:
@@ -384,7 +405,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.instanceName != "" {
 						go func() {
 							tabs := [3]int{m.panels[0].activeIdx, m.panels[1].activeIdx, m.panels[2].activeIdx}
-							_ = SavePanelTabs(m.statePath, tabs)
+							if err := SavePanelTabs(m.statePath, tabs); err != nil {
+								debugLog("SavePanelTabs: %v", err)
+							}
 						}()
 					}
 				} else if m.isDebugTabActive(pid) {

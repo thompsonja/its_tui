@@ -254,6 +254,12 @@ type Config struct {
 	// LogDir is the root directory for log files.
 	// Defaults to "/tmp" if empty.
 	LogDir string
+
+	// WorkspaceDir is the project root used to locate the .vscode folder for
+	// automatic launch.json management. Defaults to the current working
+	// directory when empty. Launch configs are only written/removed when a
+	// .vscode directory already exists at this path.
+	WorkspaceDir string
 }
 
 // ── Runtime globals ───────────────────────────────────────────────────────────

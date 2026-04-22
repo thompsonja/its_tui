@@ -49,3 +49,10 @@ func stepDebugLog(format string, args ...interface{}) {
 		stepDebugLogger.Printf(format, args...)
 	}
 }
+
+// DebugLog writes a message to the shared debug log. Exported for use by
+// packages that implement steps (e.g. builtins) where the unexported
+// stepDebugLog is not accessible.
+func DebugLog(format string, args ...interface{}) {
+	stepDebugLog(format, args...)
+}
