@@ -122,10 +122,10 @@ func fakeBuild(id string, err error) func(WizardValues) (Step, error) {
 // ── buildDefsFromTemplates ────────────────────────────────────────────────────
 
 func TestBuildDefsFromTemplates_SkipsNilStep(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "opt",
 		Build: func(v WizardValues) (Step, error) { return nil, nil },
-	}}}}
+	}}}}}
 	defs, err := m.buildDefsFromTemplates(WizardValues{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -136,10 +136,10 @@ func TestBuildDefsFromTemplates_SkipsNilStep(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_PropagatesError(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "bad",
 		Build: fakeBuild("", errors.New("boom")),
-	}}}}
+	}}}}}
 	_, err := m.buildDefsFromTemplates(WizardValues{})
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -147,10 +147,10 @@ func TestBuildDefsFromTemplates_PropagatesError(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_ErrorIncludesLabel(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "my-step",
 		Build: fakeBuild("", errors.New("oops")),
-	}}}}
+	}}}}}
 	_, err := m.buildDefsFromTemplates(WizardValues{})
 	if err == nil || err.Error() == "" {
 		t.Fatal("expected non-empty error")
@@ -162,7 +162,7 @@ func TestBuildDefsFromTemplates_ErrorIncludesLabel(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_RejectsDuplicateStepIDs(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{
 		{
 			Label: "first",
 			Build: fakeBuild("duplicate-id", nil),
@@ -171,7 +171,7 @@ func TestBuildDefsFromTemplates_RejectsDuplicateStepIDs(t *testing.T) {
 			Label: "second",
 			Build: fakeBuild("duplicate-id", nil),
 		},
-	}}}
+	}}}}
 	_, err := m.buildDefsFromTemplates(WizardValues{})
 	if err == nil {
 		t.Fatal("expected error for duplicate step IDs, got nil")
@@ -187,11 +187,11 @@ func TestBuildDefsFromTemplates_RejectsDuplicateStepIDs(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_UsesLabelFunc(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label:     "base",
 		LabelFunc: func(v WizardValues) string { return "dynamic-" + v.String("x") },
 		Build:     fakeBuild("s", nil),
-	}}}}
+	}}}}}
 	vals := NewWizardValues(map[string]string{"x": "42"}, nil)
 	defs, err := m.buildDefsFromTemplates(vals)
 	if err != nil {
@@ -203,10 +203,10 @@ func TestBuildDefsFromTemplates_UsesLabelFunc(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_FallsBackToLabel(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "static",
 		Build: fakeBuild("s", nil),
-	}}}}
+	}}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if defs[0].meta.label != "static" {
 		t.Fatalf("expected static, got %q", defs[0].meta.label)
@@ -214,11 +214,11 @@ func TestBuildDefsFromTemplates_FallsBackToLabel(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_WiresPanel(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Panel: PanelTopRight,
 		Build: fakeBuild("x", nil),
-	}}}}
+	}}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if defs[0].meta.panel != PanelTopRight {
 		t.Fatalf("expected PanelTopRight, got %d", defs[0].meta.panel)
@@ -226,11 +226,11 @@ func TestBuildDefsFromTemplates_WiresPanel(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_WiresWaitFor(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label:   "x",
 		WaitFor: []string{"dep"},
 		Build:   fakeBuild("x", nil),
-	}}}}
+	}}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if defs[0].meta.waitFor[0] != "dep" {
 		t.Fatalf("expected dep, got %q", defs[0].meta.waitFor)
@@ -238,11 +238,11 @@ func TestBuildDefsFromTemplates_WiresWaitFor(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_WiresMultipleWaitFor(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label:   "x",
 		WaitFor: []string{"a", "b"},
 		Build:   fakeBuild("x", nil),
-	}}}}
+	}}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if len(defs[0].meta.waitFor) != 2 {
 		t.Fatalf("expected 2 WaitFor entries, got %d", len(defs[0].meta.waitFor))
@@ -254,14 +254,14 @@ func TestBuildDefsFromTemplates_WiresMultipleWaitFor(t *testing.T) {
 
 func TestBuildDefsFromTemplates_WiresOnReady(t *testing.T) {
 	var got string
-	m := &model{
+	m := &model{app: appState{
 		cfg: Config{Steps: []StepTemplate{{
 			Label:   "x",
 			OnReady: func(sp string) { got = sp },
 			Build:   fakeBuild("x", nil),
 		}}},
 		statePath: "/test/state.json",
-	}
+	}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	defs[0].meta.onReady()
 	if got != "/test/state.json" {
@@ -271,13 +271,13 @@ func TestBuildDefsFromTemplates_WiresOnReady(t *testing.T) {
 
 func TestBuildDefsFromTemplates_PassesValuesToBuild(t *testing.T) {
 	var received WizardValues
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Build: func(v WizardValues) (Step, error) {
 			received = v
 			return &fakeStep{id: "x"}, nil
 		},
-	}}}}
+	}}}}}
 	vals := NewWizardValues(map[string]string{"cpu": "8"}, nil)
 	m.buildDefsFromTemplates(vals)
 	if received.String("cpu") != "8" {
@@ -286,11 +286,11 @@ func TestBuildDefsFromTemplates_PassesValuesToBuild(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_MultipleTemplates(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{
 		{Label: "a", Build: fakeBuild("a", nil)},
 		{Label: "b", Build: func(v WizardValues) (Step, error) { return nil, nil }}, // skipped
 		{Label: "c", Build: fakeBuild("c", nil)},
-	}}}
+	}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if len(defs) != 2 {
 		t.Fatalf("expected 2 defs (b skipped), got %d", len(defs))
@@ -298,11 +298,11 @@ func TestBuildDefsFromTemplates_MultipleTemplates(t *testing.T) {
 }
 
 func TestBuildDefsFromTemplates_NilOnReadyNotWired(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label:   "x",
 		OnReady: nil,
 		Build:   fakeBuild("x", nil),
-	}}}}
+	}}}}}
 	defs, _ := m.buildDefsFromTemplates(WizardValues{})
 	if defs[0].meta.onReady != nil {
 		t.Fatal("OnReady should be nil when template.OnReady is nil")
@@ -313,13 +313,13 @@ func TestBuildDefsFromTemplates_NilOnReadyNotWired(t *testing.T) {
 
 func TestBuildPipelineFromState_PassesStringValues(t *testing.T) {
 	var gotMode string
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Build: func(v WizardValues) (Step, error) {
 			gotMode = v.String("mode")
 			return &fakeStep{id: "x"}, nil
 		},
-	}}}}
+	}}}}}
 	inst := &InstanceState{
 		StringValues: map[string]string{"mode": "debug"},
 		SliceValues:  map[string][]string{},
@@ -335,13 +335,13 @@ func TestBuildPipelineFromState_PassesStringValues(t *testing.T) {
 
 func TestBuildPipelineFromState_PassesSliceValues(t *testing.T) {
 	var gotComps []string
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Build: func(v WizardValues) (Step, error) {
 			gotComps = v.Strings("components")
 			return &fakeStep{id: "x"}, nil
 		},
-	}}}}
+	}}}}}
 	inst := &InstanceState{
 		StringValues: map[string]string{},
 		SliceValues:  map[string][]string{"components": {"a", "b"}},
@@ -353,7 +353,7 @@ func TestBuildPipelineFromState_PassesSliceValues(t *testing.T) {
 }
 
 func TestBuildPipelineFromState_NilMapsAreSafe(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Build: func(v WizardValues) (Step, error) {
 			// Should not panic on nil maps.
@@ -361,7 +361,7 @@ func TestBuildPipelineFromState_NilMapsAreSafe(t *testing.T) {
 			_ = v.Strings("anything")
 			return &fakeStep{id: "x"}, nil
 		},
-	}}}}
+	}}}}}
 	// InstanceState with nil maps.
 	inst := &InstanceState{}
 	defs := m.buildPipelineFromState("test", inst)
@@ -372,10 +372,10 @@ func TestBuildPipelineFromState_NilMapsAreSafe(t *testing.T) {
 
 func TestBuildPipelineFromState_IgnoresBuildError(t *testing.T) {
 	// Errors during session restore are silently dropped so we don't crash.
-	m := &model{cfg: Config{Steps: []StepTemplate{{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{{
 		Label: "x",
 		Build: fakeBuild("", errors.New("generate failed")),
-	}}}}
+	}}}}}
 	inst := &InstanceState{}
 	defs := m.buildPipelineFromState("test", inst)
 	if len(defs) != 0 {
@@ -607,10 +607,10 @@ func TestValidateTemplates_AllValidTemplates(t *testing.T) {
 // ── Wizard pre-population ─────────────────────────────────────────────────────
 
 func TestNewStartWizard_PrePopulatesSelectField(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}}
 	// CPU options: "2"(0), "4"(1), "8"(2), "16"(3) — select "8"
 	initial := NewWizardValues(map[string]string{"cpu": "8"}, nil)
-	wiz := newStartWizard(m, initial)
+	wiz := newStartWizard(m.app.cfg, 0, initial)
 	cpuState := wiz.states[0] // first field is cpu
 	if cpuState.selectIdx != 2 {
 		t.Fatalf("expected cpuIdx=2 (\"8\"), got %d", cpuState.selectIdx)
@@ -618,21 +618,21 @@ func TestNewStartWizard_PrePopulatesSelectField(t *testing.T) {
 }
 
 func TestNewStartWizard_PrePopulatesSelectUnknownValue(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}}
 	// Unknown value falls back to Default (index 1 for CPU).
 	initial := NewWizardValues(map[string]string{"cpu": "999"}, nil)
-	wiz := newStartWizard(m, initial)
+	wiz := newStartWizard(m.app.cfg, 0, initial)
 	if wiz.states[0].selectIdx != 1 {
 		t.Fatalf("expected default index 1, got %d", wiz.states[0].selectIdx)
 	}
 }
 
 func TestNewStartWizard_PrePopulatesSingleSelect(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{
 		MFETemplate([]string{"checkout-mfe", "user-mfe"}, nil),
-	}}}
+	}}}}
 	initial := NewWizardValues(map[string]string{"mfe": "user-mfe"}, nil)
-	wiz := newStartWizard(m, initial)
+	wiz := newStartWizard(m.app.cfg, 0, initial)
 	if wiz.states[0].singleValue != "user-mfe" {
 		t.Fatalf("expected user-mfe, got %q", wiz.states[0].singleValue)
 	}
@@ -643,14 +643,14 @@ func TestNewStartWizard_PrePopulatesSystemSelect(t *testing.T) {
 		Name:       "checkout",
 		Components: []Component{{Name: "checkout-backend"}, {Name: "checkout-bff"}},
 	}}
-	m := &model{cfg: Config{Steps: []StepTemplate{
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{
 		SkaffoldTemplate(nil, func(v WizardValues) []System { return systems }),
-	}}}
+	}}}}
 	initial := NewWizardValues(
 		map[string]string{"mode": "debug"},
 		map[string][]string{"components": {"checkout-backend"}},
 	)
-	wiz := newStartWizard(m, initial)
+	wiz := newStartWizard(m.app.cfg, 0, initial)
 
 	// Field 0 is "components" (SystemSelect), field 1 is "mode" (Select).
 	compState := wiz.states[0]
@@ -665,8 +665,8 @@ func TestNewStartWizard_PrePopulatesSystemSelect(t *testing.T) {
 }
 
 func TestNewStartWizard_EmptyInitialLeavesDefaults(t *testing.T) {
-	m := &model{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}
-	wiz := newStartWizard(m, WizardValues{})
+	m := &model{app: appState{cfg: Config{Steps: []StepTemplate{MinikubeTemplate()}}}}
+	wiz := newStartWizard(m.app.cfg, 0, WizardValues{})
 	// CPU default is index 1 ("4"), RAM default is index 1 ("4g").
 	if wiz.states[0].selectIdx != 1 {
 		t.Fatalf("expected default cpuIdx=1, got %d", wiz.states[0].selectIdx)

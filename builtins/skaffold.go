@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/thompsonja/its_tui/config"
@@ -30,14 +31,22 @@ func SkaffoldLogPath(instanceName, mode string) string {
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
 // It depends on minikube being ready before Start is called.
 type SkaffoldStep struct {
-	Path     string    // path to skaffold.yaml
-	Mode     string    // "dev", "run", or "debug"; defaults to "dev"
-	Profiles []string  // optional skaffold profiles to activate (--profile flags)
-	send     func(any) // injected sender; falls back to global Send
+	Path      string    // path to skaffold.yaml
+	Mode      string    // "dev", "run", or "debug"; defaults to "dev"
+	Profiles  []string  // optional skaffold profiles to activate (--profile flags)
+	StatePath string    // path to state.json; defaults to config.DefaultStatePath()
+	send      func(any) // injected sender; falls back to global Send
 }
 
 // SetSender injects a message sender for testing. Falls back to the global Send.
 func (s *SkaffoldStep) SetSender(fn func(any)) { s.send = fn }
+
+func (s *SkaffoldStep) statePath() string {
+	if s.StatePath != "" {
+		return s.StatePath
+	}
+	return config.DefaultStatePath()
+}
 
 func (s *SkaffoldStep) sender() func(any) {
 	if s.send != nil {
@@ -58,6 +67,7 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 	if mode == "" {
 		mode = "dev"
 	}
+	step.DebugLog("skaffold %s Start() called for instance %q", mode, instanceName)
 
 	logPath := SkaffoldLogPath(instanceName, mode)
 	os.Remove(logPath) // clear previous log so tail -F starts fresh
@@ -71,17 +81,17 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 		absPath = s.Path
 	}
 
-	if mode == "run" {
-		return s.startRunMode(ctx, lf, absPath)
+	if mode == "run" || mode == "build" {
+		return s.startRunMode(ctx, lf, absPath, mode)
 	}
-	return s.startWatchMode(ctx, lf, absPath, mode)
+	return s.startWatchMode(ctx, instanceName, lf, absPath, mode)
 }
 
-// startRunMode runs `skaffold run` synchronously and blocks until the process
-// exits. A zero exit code is treated as "ready/done"; non-zero is an error.
-func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath string) error {
+// startRunMode runs `skaffold run` or `skaffold build` synchronously and blocks
+// until the process exits. A zero exit code is "ready/done"; non-zero is an error.
+func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath, mode string) error {
 	defer lf.Close()
-	args := []string{"run", "--filename", absPath}
+	args := []string{mode, "--filename", absPath}
 	for _, p := range s.Profiles {
 		args = append(args, "--profile", p)
 	}
@@ -102,7 +112,11 @@ func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath st
 // startWatchMode runs `skaffold dev|debug` with --rpc-http-port and blocks
 // until the first successful deploy is detected via the event stream, then
 // returns while skaffold continues running in the background.
-func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath, mode string) error {
+//
+// Skaffold runs in its own process group (Setpgid) so ctrl+c in the terminal
+// only kills the TUI, not skaffold. The PID is saved synchronously to step_data
+// so Resume() can check liveness after a TUI restart.
+func (s *SkaffoldStep) startWatchMode(ctx context.Context, instanceName string, lf *os.File, absPath, mode string) error {
 	port, err := step.RandomPort()
 	if err != nil {
 		lf.Close()
@@ -113,8 +127,10 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	for _, p := range s.Profiles {
 		args = append(args, "--profile", p)
 	}
-	cmd := exec.CommandContext(ctx, "skaffold", args...)
+	// Use exec.Command (not CommandContext) so we can manage the process group.
+	cmd := exec.Command("skaffold", args...)
 	cmd.Dir = filepath.Dir(absPath)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = lf
 	cmd.Stderr = lf
 	fmt.Fprintf(lf, "[tui] running: %s\n", strings.Join(cmd.Args, " "))
@@ -123,6 +139,22 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 		lf.Close()
 		return err
 	}
+
+	pgid := cmd.Process.Pid // with Setpgid=true, pgid == pid
+
+	// Save PID directly to step_data so Resume() can check liveness on restart.
+	// Synchronous — the PID is on disk before we block waiting for deploy.
+	sp := s.statePath()
+	if err := config.SaveStepData(sp, s.ID(), "pid", strconv.Itoa(pgid)); err != nil {
+		step.DebugLog("skaffold %s: SaveStepData pid: %v", mode, err)
+	}
+
+	// Kill the process group when the instance context is cancelled (stop command).
+	// SIGTERM lets skaffold clean up; the process group ensures children are included.
+	go func() {
+		<-ctx.Done()
+		syscall.Kill(-pgid, syscall.SIGTERM)
+	}()
 
 	// watchCtx is cancelled when the process exits, which unblocks the event
 	// watcher so it doesn't linger after skaffold dies.
@@ -136,8 +168,10 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 	go func() {
 		defer lf.Close()
 		err := cmd.Wait()
-		exitErr <- err // fill before cancelling the watcher
-		cancelWatch()  // unblock waitForSkaffoldDeploy
+		// Clear the saved PID so Resume() restarts rather than probing a dead PID.
+		config.SaveStepData(sp, s.ID(), "pid", "") //nolint:errcheck
+		exitErr <- err                              // fill before cancelling the watcher
+		cancelWatch()                               // unblock waitForSkaffoldDeploy
 		if ctx.Err() != nil {
 			return // instance was stopped — suppress noise
 		}
@@ -193,17 +227,47 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, lf *os.File, absPath,
 // Stop is a no-op: skaffold is terminated when the instance context is cancelled.
 func (s *SkaffoldStep) Stop(_ context.Context, _ string) error { return nil }
 
-// Resume implements step.Resumer. For run and build modes the work is already
-// done and the results persist in the cluster or registry, so we skip the step.
-// For dev and debug modes skaffold is a live-reload watcher that must be
-// restarted whenever the TUI starts — returning an error causes the caller to
-// call Start() again.
-func (s *SkaffoldStep) Resume(_ context.Context, _ string) error {
+// Resume implements step.Resumer. For run and build modes the work persists in
+// the cluster/registry so we skip. For dev and debug, we read the PID from
+// step_data and check liveness. Alive → reattach (WatchStep tails existing
+// log). Dead or no PID → return error so Start() redeploys.
+func (s *SkaffoldStep) Resume(_ context.Context, instanceName string) error {
 	switch s.Mode {
 	case "run", "build":
+		step.DebugLog("skaffold %s Resume(): run/build mode — skipping (work persists)", s.Mode)
 		return nil // deployment / images already exist; nothing to do
 	default:
-		return fmt.Errorf("skaffold %s restarted", s.Mode)
+		mode := s.Mode
+		if mode == "" {
+			mode = "dev"
+		}
+		pidStr, ok := config.LoadStepData(s.statePath(), s.ID(), "pid")
+		step.DebugLog("skaffold %s Resume() for instance %q: loaded pid=%q ok=%v", mode, instanceName, pidStr, ok)
+		if !ok || pidStr == "" {
+			err := fmt.Errorf("skaffold %s: no saved PID, restarting", mode)
+			step.DebugLog("skaffold %s Resume(): %v", mode, err)
+			return err
+		}
+		pid, err := strconv.Atoi(pidStr)
+		if err != nil || pid <= 0 {
+			err := fmt.Errorf("skaffold %s: invalid saved PID %q, restarting", mode, pidStr)
+			step.DebugLog("skaffold %s Resume(): %v", mode, err)
+			return err
+		}
+		proc, err := os.FindProcess(pid)
+		if err != nil {
+			err := fmt.Errorf("skaffold %s: process not found (pid=%d), restarting", mode, pid)
+			step.DebugLog("skaffold %s Resume(): %v", mode, err)
+			return err
+		}
+		// Signal 0 checks liveness without delivering a signal.
+		if sigErr := proc.Signal(syscall.Signal(0)); sigErr != nil {
+			err := fmt.Errorf("skaffold %s: process dead (pid=%d, signal err=%v), restarting", mode, pid, sigErr)
+			step.DebugLog("skaffold %s Resume(): %v", mode, err)
+			return err
+		}
+		step.DebugLog("skaffold %s Resume(): pid=%d is alive — reattaching without redeploy", mode, pid)
+		return nil // process still alive — reattach without redeploying
 	}
 }
 
@@ -371,7 +435,7 @@ func SkaffoldTemplate(generate func(v tui.WizardValues) (path string, profiles [
 			if path == "" {
 				return nil, nil
 			}
-			return &SkaffoldStep{Path: path, Mode: mode, Profiles: profiles}, nil
+			return &SkaffoldStep{Path: path, Mode: mode, Profiles: profiles, StatePath: config.DefaultStatePath()}, nil
 		},
 	}
 }
@@ -421,7 +485,7 @@ func SkaffoldBuildTemplate(generate func(v tui.WizardValues) (path string, profi
 			if path == "" {
 				return nil, nil
 			}
-			return &SkaffoldStep{Path: path, Mode: "build", Profiles: profiles}, nil
+			return &SkaffoldStep{Path: path, Mode: "build", Profiles: profiles, StatePath: config.DefaultStatePath()}, nil
 		},
 	}
 }
@@ -464,6 +528,30 @@ func SkaffoldFileGeneratorTemplate(cfg *SkaffoldConfig, generate func(v tui.Wiza
 			if generate == nil {
 				return nil, fmt.Errorf("skaffold generator: generate function is nil")
 			}
+
+			const genID = "skaffold_generator"
+			sp := config.DefaultStatePath()
+
+			// On session restore the wizard values are identical to last run, so
+			// skip regeneration to avoid touching the file and triggering a
+			// skaffold dev redeploy.
+			if v.IsRestore() {
+				savedPath, ok := config.LoadStepData(sp, genID, "path")
+				if ok && savedPath != "" {
+					if _, err := os.Stat(savedPath); err == nil {
+						step.DebugLog("skaffold generator: restore — reusing cached path %q", savedPath)
+						cfg.Path = savedPath
+						if savedProfs, ok := config.LoadStepData(sp, genID, "profiles"); ok && savedProfs != "" {
+							cfg.Profiles = strings.Split(savedProfs, ",")
+						} else {
+							cfg.Profiles = nil
+						}
+						return nil, nil
+					}
+					step.DebugLog("skaffold generator: restore — cached path %q gone, regenerating", savedPath)
+				}
+			}
+
 			path, profiles, err := generate(v)
 			if err != nil {
 				return nil, fmt.Errorf("skaffold generator: %w", err)
@@ -473,6 +561,11 @@ func SkaffoldFileGeneratorTemplate(cfg *SkaffoldConfig, generate func(v tui.Wiza
 			}
 			cfg.Path = path
 			cfg.Profiles = profiles
+
+			config.SaveStepData(sp, genID, "path", path)                           //nolint:errcheck
+			config.SaveStepData(sp, genID, "profiles", strings.Join(profiles, ",")) //nolint:errcheck
+			step.DebugLog("skaffold generator: generated path %q", path)
+
 			return nil, nil // no step to run, just populate the config
 		},
 	}
@@ -526,7 +619,7 @@ func SkaffoldTemplateFrom(cfg *SkaffoldConfig) tui.StepTemplate {
 			if mode == "" {
 				mode = "dev"
 			}
-			return &SkaffoldStep{Path: cfg.Path, Mode: mode, Profiles: cfg.Profiles}, nil
+			return &SkaffoldStep{Path: cfg.Path, Mode: mode, Profiles: cfg.Profiles, StatePath: config.DefaultStatePath()}, nil
 		},
 	}
 }
@@ -562,7 +655,7 @@ func SkaffoldBuildTemplateFrom(cfg *SkaffoldConfig) tui.StepTemplate {
 			if cfg.Path == "" {
 				return nil, fmt.Errorf("skaffold config path is empty - ensure SkaffoldFileGeneratorTemplate ran first")
 			}
-			return &SkaffoldStep{Path: cfg.Path, Mode: "build", Profiles: cfg.Profiles}, nil
+			return &SkaffoldStep{Path: cfg.Path, Mode: "build", Profiles: cfg.Profiles, StatePath: config.DefaultStatePath()}, nil
 		},
 	}
 }

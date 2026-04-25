@@ -103,22 +103,26 @@ func WatchStep(ctx context.Context, s Step, instanceName string) {
 //   - Skaffold can always restart its process
 //   - One-time setup steps can skip if work is done
 func ResumeStep(ctx context.Context, s Step, instanceName string, wasCompleted bool) error {
+	id := s.ID()
 	// If step has custom resume logic, use it
 	if resumer, ok := s.(Resumer); ok {
+		stepDebugLog("ResumeStep: step %q implements Resumer — calling Resume()", id)
 		if err := resumer.Resume(ctx, instanceName); err != nil {
-			// Resume failed, need to call Start()
-			return s.Start(ctx, instanceName)
+			stepDebugLog("ResumeStep: step %q Resume() failed (%v) — calling Start()", id, err)
+			startErr := s.Start(ctx, instanceName)
+			stepDebugLog("ResumeStep: step %q Start() returned: %v", id, startErr)
+			return startErr
 		}
-		// Resume succeeded, step is ready
+		stepDebugLog("ResumeStep: step %q Resume() succeeded — reattaching without restart", id)
 		return nil
 	}
 
 	// Default behavior: skip completed steps, restart others
 	if wasCompleted {
-		// No custom resume logic and step completed - assume work is still valid
+		stepDebugLog("ResumeStep: step %q has no Resumer and was completed — skipping", id)
 		return nil
 	}
 
-	// Step was not completed (running/pending/failed) - restart it
+	stepDebugLog("ResumeStep: step %q has no Resumer and was not completed — calling Start()", id)
 	return s.Start(ctx, instanceName)
 }

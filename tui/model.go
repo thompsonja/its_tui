@@ -1,18 +1,14 @@
 package tui
 
 import (
-	"context"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/thompsonja/its_tui/step"
 )
 
-// Panel indices — order determines Tab cycle direction.
+// Panel focus indices — order determines Tab cycle direction.
 const (
 	panelMinikube = iota
 	panelSkaffold
@@ -21,7 +17,7 @@ const (
 	numPanels
 )
 
-// overlayKind identifies which overlay is currently shown inside the Commands panel.
+// overlayKind identifies which overlay is currently shown in the Commands panel.
 type overlayKind int
 
 const (
@@ -29,8 +25,6 @@ const (
 	overlayHelp               // help reference card
 	overlayWizard             // start-instance wizard
 )
-
-const maxBufLines = 5000
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -40,114 +34,11 @@ func init() {
 	}
 }
 
-// panelView holds the steps and log buffers for one content panel.
-type panelView struct {
-	defs      []StepDef  // steps assigned to this panel, in order
-	bufs      [][]string // one buffer per def
-	activeIdx int        // which step's buffer is currently shown
-}
-
-// activeBuf returns the buffer for the currently active step, or nil if empty.
-func (pv *panelView) activeBuf() []string {
-	if len(pv.bufs) == 0 || pv.activeIdx < 0 || pv.activeIdx >= len(pv.bufs) {
-		return nil
-	}
-	return pv.bufs[pv.activeIdx]
-}
-
+// model is the Bubbletea tea.Model shim. It owns an appState (domain) and a
+// viewState (display), keeping the two concerns clearly separated.
 type model struct {
-	width, height int
-	ready         bool
-	focused       int
-
-	cfg          Config // library configuration provided by the caller
-	instanceName string // name of the currently running instance; "" when stopped
-	statePath    string // path to state.json
-	workspaceDir string // directory containing .vscode for launch.json management
-
-	// Content panels: index by PanelID (0=TopLeft, 1=TopRight, 2=BottomRight).
-	panels   [3]panelView
-	panelVPs [3]viewport.Model
-
-	commandsVP    viewport.Model
-	helpOverlayVP viewport.Model // shown inside commands panel when help is active
-
-	input textinput.Model
-
-	commandsBuf []string
-
-	// card-flip animation: 0.0 = commands fully visible, 1.0 = overlay fully visible.
-	flipProgress float64
-	flipTarget   float64
-	overlay      overlayKind
-	wizard       *startWizard
-
-	// fullscreen animation: 0.0 = normal grid, 1.0 = focused panel fills screen.
-	fullscreenProgress float64
-	fullscreenTarget   float64
-
-	// command history — navigated with ↑ / ↓ in the Commands panel.
-	cmdHistory   []string
-	historyIdx   int    // -1 = not navigating; ≥0 = index into cmdHistory
-	historyDraft string // input saved when navigation starts, restored on ↓ past end
-
-	// spinner — shown in Commands title while background commands are running.
-	runningCmds int
-	spinnerTick int
-
-	// fwdPorts collects forwarded service ports; debugPorts collects debug ports.
-	// When non-empty, virtual tabs are appended to the skaffold panel.
-	fwdPorts   []step.DebugPortMsg
-	debugPorts []step.DebugPortMsg
-	portsVP    viewport.Model // viewport for the virtual Ports tab (forwarded ports)
-	debugVP    viewport.Model // viewport for the virtual Debug tab (debug ports)
-
-	// flash shows a brief success/error notification inside the Ports tab.
-	flashMsg   string
-	flashOk    bool
-	flashUntil int // spinnerTick value at which the flash is cleared
-
-	// test runner — virtual Tests tab on BottomRight panel.
-	testBuf     []string
-	testVP      viewport.Model
-	testRunning bool
-
-	// steps tracks in-progress operations shown as spinner lines in the commands panel.
-	steps map[string]*commandStep
-
-	// activeDefs holds the built step definitions for the current instance.
-	// Used by stop command to call each step's Stop() method.
-	activeDefs []StepDef
-
-	// stepCtxs holds per-step contexts for individual step cancellation.
-	stepCtxs map[string]stepEntry
-
-	// customCommands maps command names to their handlers.
-	// Built from StepTemplate.Commands during buildDefsFromTemplates.
-	customCommands map[string]CommandSpec
-
-	// searchMode indicates panel log search is active.
-	searchMode  bool
-	searchQuery string
-	searchInput textinput.Model
-
-	// Track startup completion for displaying startup time
-	totalSteps     int // total non-hidden steps for the current instance
-	completedSteps int // count of completed steps
-}
-
-// stepEntry holds the context and cancel function for a single step goroutine.
-type stepEntry struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
-// configuredName returns the instance name from Config, falling back to the default.
-func (m *model) configuredName() string {
-	if m.cfg.InstanceName != "" {
-		return m.cfg.InstanceName
-	}
-	return defaultInstanceName
+	app appState
+	vs  viewState
 }
 
 func newModel(cfg Config) model {
@@ -166,15 +57,19 @@ func newModel(cfg Config) model {
 	}
 
 	return model{
-		cfg:                cfg,
-		workspaceDir:       workspaceDir,
-		focused:            panelCommands,
-		input:              ti,
-		searchInput:        si,
-		historyIdx:         -1,
-		fullscreenProgress: 1.0,
-		fullscreenTarget:   1.0,
-		customCommands:     make(map[string]CommandSpec),
+		app: appState{
+			cfg:          cfg,
+			workspaceDir: workspaceDir,
+			historyIdx:   -1,
+			customCmds:   make(map[string]CommandSpec),
+		},
+		vs: viewState{
+			focused:            panelCommands,
+			input:              ti,
+			searchInput:        si,
+			fullscreenProgress: 1.0,
+			fullscreenTarget:   1.0,
+		},
 	}
 }
 
@@ -188,105 +83,43 @@ func tickCmd() tea.Cmd {
 	})
 }
 
-// registerPipeline assigns steps to panels and initializes panel buffers.
-// Steps with Panel == PanelNone are skipped (they run but produce no visible output).
-func (m *model) registerPipeline(defs []StepDef) {
-	var pv [3]panelView
-	for _, def := range defs {
-		if def.meta.panel == PanelNone {
-			continue // Skip steps with no panel assignment
-		}
-		pid := int(def.meta.panel)
-		pv[pid].defs = append(pv[pid].defs, def)
-		pv[pid].bufs = append(pv[pid].bufs, nil)
-	}
-	m.panels = pv
+// printLine appends a line to the commands buffer and syncs the viewport.
+func (m *model) printLine(s string) {
+	m.app.commandsBuf = appendLine(m.app.commandsBuf, s)
+	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
+	m.vs.commandsVP.GotoBottom()
 }
 
-// panelAndIdx returns the PanelID, buffer index, and whether the step was found.
-// Returns (0, -1, false) if not found.
-func (m *model) panelAndIdx(id string) (PanelID, int, bool) {
-	for pid, pv := range m.panels {
-		for i, def := range pv.defs {
-			if def.Step.ID() == id {
-				return PanelID(pid), i, true
-			}
-		}
+func (m *model) cycleFocus(d int) {
+	m.vs.focused = (m.vs.focused + d + numPanels) % numPanels
+	if m.vs.focused == panelCommands {
+		m.vs.input.Focus()
+	} else {
+		m.vs.input.Blur()
 	}
-	return 0, -1, false
 }
 
-// findDef returns the StepDef for the given step ID.
-func (m *model) findDef(id string) (StepDef, bool) {
-	for _, pv := range m.panels {
-		for _, def := range pv.defs {
-			if def.Step.ID() == id {
-				return def, true
-			}
-		}
-	}
-	return StepDef{}, false
+// resizePanels recalculates all viewport dimensions and syncs content.
+func (m *model) resizePanels() {
+	m.vs.resize(m.app)
 }
 
-// focusedPanelID returns the PanelID for the currently focused content panel.
-// Returns (0, false) when the Commands panel is focused.
-func (m *model) focusedPanelID() (PanelID, bool) {
-	switch m.focused {
-	case panelMinikube:
-		return PanelTopLeft, true
-	case panelSkaffold:
-		return PanelTopRight, true
-	case panelMFE:
-		return PanelBottomRight, true
+// refreshFocusedPanel regenerates the focused panel viewport, applying search
+// highlighting when search mode is active.
+func (m *model) refreshFocusedPanel() {
+	pid, ok := focusedPanelID(m.vs.focused)
+	if !ok {
+		return
 	}
-	return 0, false
-}
-
-func appendLine(buf []string, line string) []string {
-	buf = append(buf, line)
-	if len(buf) > maxBufLines {
-		buf = buf[len(buf)-maxBufLines:]
+	pv := &m.app.panels[pid]
+	if pv.activeIdx >= len(pv.bufs) {
+		return
 	}
-	return buf
-}
-
-func joinLines(buf []string) string {
-	return strings.Join(buf, "\n")
-}
-
-// wrapLine hard-wraps a single line at width runes, inserting newlines.
-func wrapLine(line string, width int) string {
-	runes := []rune(line)
-	if width <= 0 || len(runes) <= width {
-		return line
+	buf := pv.bufs[pv.activeIdx]
+	vp := &m.vs.panelVPs[pid]
+	if m.vs.searchMode && m.vs.searchQuery != "" {
+		vp.SetContent(wrapContentSearch(buf, vp.Width, m.vs.searchQuery))
+	} else {
+		vp.SetContent(wrapContent(buf, vp.Width))
 	}
-	var sb strings.Builder
-	for len(runes) > width {
-		sb.WriteString(string(runes[:width]))
-		sb.WriteByte('\n')
-		runes = runes[width:]
-	}
-	if len(runes) > 0 {
-		sb.WriteString(string(runes))
-	}
-	return sb.String()
-}
-
-// wrapContent wraps each line in buf to width and joins with newlines.
-func wrapContent(buf []string, width int) string {
-	if width <= 0 {
-		return joinLines(buf)
-	}
-	result := make([]string, 0, len(buf))
-	for _, line := range buf {
-		result = append(result, wrapLine(line, width))
-	}
-	return strings.Join(result, "\n")
-}
-
-// appendToVP appends line to buf, syncs content to vp, and scrolls to bottom.
-func appendToVP(buf *[]string, vp *viewport.Model, line string) {
-	*buf = appendLine(*buf, line)
-	vp.SetContent(wrapContent(*buf, vp.Width))
-	vp.GotoBottom()
 }

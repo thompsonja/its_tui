@@ -11,17 +11,16 @@ import (
 )
 
 // executeStartFromWizard handles the start command initiated from the wizard.
-// It builds the pipeline from wizard selections and starts execution.
 func (m *model) executeStartFromWizard() {
 	debugLog("executeStartFromWizard: called")
-	wiz := m.wizard
+	wiz := m.vs.wizard
 	if wiz == nil {
 		debugLog("executeStartFromWizard: wizard not initialized")
 		m.printLine("  internal error: wizard not initialized")
 		return
 	}
-	sp := m.statePath
-	name := m.configuredName()
+	sp := m.app.statePath
+	name := m.app.configuredName()
 
 	debugLog("executeStartFromWizard: instance name=%q, statePath=%q", name, sp)
 	m.printLine("$ start")
@@ -35,22 +34,23 @@ func (m *model) executeStartFromWizard() {
 		return
 	}
 	debugLog("executeStartFromWizard: built %d step definitions", len(defs))
-	// Inject message sender into steps that support it, so they can be
-	// tested without the global Send and send messages via prog.
 	for _, def := range defs {
 		if s, ok := def.Step.(step.Sender); ok {
 			s.SetSender(func(msg any) { prog.Send(msg) })
 		}
 	}
 
-	// Check if there's an existing instance state with step states (resume scenario)
 	var existingStepStates map[string]StepState
 	if state, err := LoadState(sp); err == nil && state.Instance != nil && len(state.Instance.StepStates) > 0 {
 		existingStepStates = state.Instance.StepStates
+		debugLog("executeStartFromWizard: found %d existing step states", len(existingStepStates))
+		for sid, ss := range existingStepStates {
+			debugLog("executeStartFromWizard: existing state: step=%q status=%s", sid, ss.Status)
+		}
+	} else {
+		debugLog("executeStartFromWizard: no existing step states — fresh start")
 	}
 
-	// Persist wizard selections and set StartedAt immediately.
-	// If resuming, keep existing step states; otherwise initialize all as pending.
 	var stepStates map[string]StepState
 	if existingStepStates != nil {
 		stepStates = existingStepStates
@@ -63,32 +63,32 @@ func (m *model) executeStartFromWizard() {
 			}
 		}
 	}
-	// SaveInstanceState must run synchronously before executeStart/executeStartWithResume
-	// spawn their goroutines. Those goroutines call UpdateStepState, and both functions
-	// do a read-modify-write on the state file. If SaveInstanceState runs asynchronously
-	// (after UpdateStepState(completed) has already fired), it overwrites the whole
-	// Instance with the initial "pending" states — leaving the file wrong on TUI exit
-	// and causing completed steps to be restarted on the next session.
+	// Preserve step_data written by Build() calls above (e.g. generator cache).
+	// SaveInstanceState replaces the entire InstanceState, so we must carry it forward.
+	var stepData map[string]map[string]string
+	if state, err := LoadState(sp); err == nil && state.Instance != nil {
+		stepData = state.Instance.StepData
+	}
 	if err := SaveInstanceState(sp, InstanceState{
 		StartedAt:    time.Now().UTC().Format(time.RFC3339),
 		StringValues: values.str,
 		SliceValues:  values.strs,
 		StepStates:   stepStates,
+		StepData:     stepData,
 	}); err != nil {
 		prog.Send(commandLineMsg(fmt.Sprintf("  warning: failed to save state: %v", err)))
 	}
 
 	m.switchToInstance(name)
-	m.activeDefs = defs // Store for use by stop command
-	m.registerPipeline(defs)
-	m.fullscreenTarget = 0
+	m.app.activeDefs = defs
+	m.app.registerPipeline(defs)
+	m.vs.fullscreenTarget = 0
 
-	// Choose execution path based on whether we're resuming
 	if existingStepStates != nil {
-		// Resume: use saved step states to skip/retry/restart
+		debugLog("executeStartFromWizard: calling executeStartWithResume (existing states present)")
 		m.executeStartWithResume(defs, existingStepStates)
 	} else {
-		// Fresh start: truncate logs and start all steps
+		debugLog("executeStartFromWizard: calling executeStart (fresh start)")
 		for _, def := range defs {
 			if lp := def.Step.LogPath(name); lp != "" {
 				if err := os.Truncate(lp, 0); err != nil {
@@ -99,22 +99,18 @@ func (m *model) executeStartFromWizard() {
 		m.executeStart(defs)
 	}
 
-	// Start watchers using the per-step contexts created by executeStart/executeStartWithResume.
-	// Skip steps with PanelNone (no output destination).
 	for _, def := range defs {
 		if def.meta.panel == PanelNone {
 			continue
 		}
 		id := def.Step.ID()
-		if e, ok := m.stepCtxs[id]; ok {
+		if e, ok := m.app.stepCtxs[id]; ok {
 			go step.WatchStep(e.ctx, def.Step, name)
 		}
 	}
 }
 
-// waitForDeps blocks until all deps in waitFor are ready or ctx is cancelled.
-// For each dep that becomes ready it sends a stepDepReadyMsg for stepID.
-// Returns true when all deps are satisfied, false if ctx was cancelled first.
+// waitForDeps blocks until all deps are ready or ctx is cancelled.
 func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}) bool {
 	if len(waitFor) == 0 {
 		return true
@@ -145,8 +141,7 @@ func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map
 	return true
 }
 
-// notifyDependentsOfFailure sends a stepDepFailedMsg to every step that lists
-// failedID in its WaitFor.
+// notifyDependentsOfFailure sends stepDepFailedMsg to every step waiting on failedID.
 func notifyDependentsOfFailure(defs []StepDef, failedID string) {
 	for _, otherDef := range defs {
 		for _, dep := range otherDef.meta.waitFor {
@@ -158,37 +153,32 @@ func notifyDependentsOfFailure(defs []StepDef, failedID string) {
 }
 
 // executeStart launches all step processes with dependency ordering.
-// Steps with WaitFor set block until their dependency signals ready.
 func (m *model) executeStart(defs []StepDef) {
 	debugLog("executeStart: launching %d steps", len(defs))
-	// Capture instanceCtx by value now to prevent a race if the global is
-	// reassigned (stop/switch) while dep-waiting goroutines are still running.
 	ctx := instanceCtx
 
-	m.steps = map[string]*commandStep{}
-	m.stepCtxs = make(map[string]stepEntry)
-	name := m.instanceName
+	m.vs.steps = map[string]*commandStep{}
+	m.app.stepCtxs = make(map[string]stepEntry)
+	name := m.app.instanceName
+	sp := m.app.statePath
 	debugLog("executeStart: instance name=%q", name)
 
-	// Initialize startup tracking
-	m.completedSteps = 0
-	m.totalSteps = 0
+	m.app.completedSteps = 0
+	m.app.totalSteps = 0
 	for _, def := range defs {
 		if !def.meta.hidden {
-			m.totalSteps++
+			m.app.totalSteps++
 		}
 	}
 
-	// Create per-step contexts and build a ready channel for each step.
 	ready := make(map[string]chan struct{}, len(defs))
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
 		stepCtx, stepCancel := context.WithCancel(ctx)
-		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+		m.app.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
-	// Register visible steps in the commands panel tracker in topological order.
 	sortedDefs := topoSortSteps(defs)
 	for _, def := range sortedDefs {
 		if def.meta.hidden {
@@ -205,7 +195,7 @@ func (m *model) executeStart(defs []StepDef) {
 	for _, def := range defs {
 		def := def
 		id := def.Step.ID()
-		stepCtx := m.stepCtxs[id].ctx
+		stepCtx := m.app.stepCtxs[id].ctx
 		go func() {
 			debugLog("executeStart: step %q: waiting for dependencies: %v", id, def.meta.waitFor)
 			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
@@ -214,17 +204,13 @@ func (m *model) executeStart(defs []StepDef) {
 			}
 			debugLog("executeStart: step %q: dependencies ready, starting", id)
 			if len(def.meta.waitFor) > 0 {
-				// Activate this step (triggers spinner + AutoActivate if set).
 				prog.Send(stepActivateMsg{id: id})
 			}
 
-			// Mark step as running
-			sp := m.statePath
 			if err := UpdateStepState(sp, id, config.StepStatusRunning, nil); err != nil {
 				debugLog("executeStart: step %q: UpdateStepState running: %v", id, err)
 			}
 
-			// Start the step.
 			debugLog("executeStart: step %q: calling Start()", id)
 			if err := def.Step.Start(stepCtx, name); err != nil {
 				debugLog("executeStart: step %q: Start() failed: %v", id, err)
@@ -234,16 +220,11 @@ func (m *model) executeStart(defs []StepDef) {
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
-					prog.Send(stepDoneMsg{
-						id:    id,
-						ok:    false,
-						label: def.effectiveLabel() + " failed: " + err.Error(),
-					})
+					prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
 				}
 				return
 			}
 
-			// Mark step as completed
 			debugLog("executeStart: step %q: Start() completed successfully", id)
 			if err := UpdateStepState(sp, id, config.StepStatusCompleted, nil); err != nil {
 				debugLog("executeStart: step %q: UpdateStepState completed: %v", id, err)
@@ -253,55 +234,43 @@ func (m *model) executeStart(defs []StepDef) {
 				go def.meta.onReady()
 			}
 			if !def.meta.hidden {
-				prog.Send(stepDoneMsg{
-					id:    id,
-					ok:    true,
-					label: def.effectiveLabel() + " running",
-				})
+				prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 			}
 		}()
 	}
 	debugLog("executeStart: all step goroutines launched")
 }
 
-// executeStartWithResume launches step processes with resume logic based on saved state.
-// Steps that completed successfully are skipped, failed steps are retried, and steps
-// that were running when the instance quit are restarted.
+// executeStartWithResume launches steps with resume logic based on saved state.
 func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]StepState) {
-	// Capture instanceCtx by value now to prevent a race if the global is
-	// reassigned (stop/switch) while dep-waiting goroutines are still running.
 	ctx := instanceCtx
 
-	m.steps = map[string]*commandStep{}
-	m.stepCtxs = make(map[string]stepEntry)
-	name := m.instanceName
-	sp := m.statePath
+	m.vs.steps = map[string]*commandStep{}
+	m.app.stepCtxs = make(map[string]stepEntry)
+	name := m.app.instanceName
+	sp := m.app.statePath
 
-	// Initialize startup tracking
-	m.completedSteps = 0
-	m.totalSteps = 0
+	m.app.completedSteps = 0
+	m.app.totalSteps = 0
 	for _, def := range defs {
 		if !def.meta.hidden {
-			m.totalSteps++
+			m.app.totalSteps++
 		}
 	}
 
-	// Create per-step contexts and build a ready channel for each step.
 	ready := make(map[string]chan struct{}, len(defs))
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
 		stepCtx, stepCancel := context.WithCancel(ctx)
-		m.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+		m.app.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
-	// Determine resume action for each step
 	resumeActions := make(map[string]ResumeAction)
 	for _, def := range defs {
 		resumeActions[def.Step.ID()] = determineResumeAction(def.Step.ID(), savedStates)
 	}
 
-	// Register visible steps in the commands panel tracker in topological order.
 	sortedDefs := topoSortSteps(defs)
 	for _, def := range sortedDefs {
 		if def.meta.hidden {
@@ -310,8 +279,6 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		id := def.Step.ID()
 		label := def.effectiveLabel()
 		action := resumeActions[id]
-
-		// Add suffix to label based on resume action
 		switch action {
 		case ResumeActionSkip:
 			label = label + " (restored)"
@@ -320,7 +287,6 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		case ResumeActionRestart:
 			label = label + " (restarting)"
 		}
-
 		if len(def.meta.waitFor) == 0 {
 			m.startStep(id, label)
 		} else {
@@ -332,38 +298,35 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		def := def
 		id := def.Step.ID()
 		action := resumeActions[id]
-		stepCtx := m.stepCtxs[id].ctx
+		stepCtx := m.app.stepCtxs[id].ctx
+		debugLog("executeStartWithResume: step %q action=%s", id, action)
 
 		go func() {
 			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+				debugLog("executeStartWithResume: step %q: dependency wait cancelled", id)
 				return
 			}
 			if len(def.meta.waitFor) > 0 {
-				// Activate this step (triggers spinner + AutoActivate if set).
 				prog.Send(stepActivateMsg{id: id})
 			}
 
-			// Handle based on resume action
 			var err error
 			wasAlreadyCompleted := false
+			debugLog("executeStartWithResume: step %q: executing action=%s", id, action)
 			if action == ResumeActionSkip {
-				// Step completed - try Resume() or skip if not implemented
-				// Don't change state - it should stay Completed unless Resume() fails
 				err = step.ResumeStep(stepCtx, def.Step, name, true)
 				if err != nil {
-					// Resume failed, need to restart - mark as running and call Start()
+					debugLog("executeStartWithResume: step %q: ResumeStep returned err=%v — calling Start() directly", id, err)
 					if stateErr := UpdateStepState(sp, id, config.StepStatusRunning, nil); stateErr != nil {
 						debugLog("executeStartWithResume: step %q: UpdateStepState running: %v", id, stateErr)
 					}
 					err = def.Step.Start(stepCtx, name)
+					debugLog("executeStartWithResume: step %q: Start() (after ResumeStep err) returned: %v", id, err)
 				} else {
-					// Resume succeeded - step stays in Completed state
+					debugLog("executeStartWithResume: step %q: ResumeStep succeeded — reattached", id)
 					wasAlreadyCompleted = true
 				}
 			} else {
-				// Step needs restart (retry/restart/start)
-
-				// Truncate log if restarting a previously-running step
 				if action == ResumeActionRestart {
 					if lp := def.Step.LogPath(name); lp != "" {
 						if truncErr := os.Truncate(lp, 0); truncErr != nil {
@@ -371,22 +334,19 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 						}
 					}
 				}
-
-				// Clear error for retry
 				if action == ResumeActionRetry {
 					if stateErr := UpdateStepState(sp, id, config.StepStatusPending, nil); stateErr != nil {
 						debugLog("executeStartWithResume: step %q: UpdateStepState pending: %v", id, stateErr)
 					}
 				}
-
-				// Mark step as running and start/restart it
 				if stateErr := UpdateStepState(sp, id, config.StepStatusRunning, nil); stateErr != nil {
 					debugLog("executeStartWithResume: step %q: UpdateStepState running: %v", id, stateErr)
 				}
+				debugLog("executeStartWithResume: step %q: calling Start() directly (action=%s)", id, action)
 				err = def.Step.Start(stepCtx, name)
+				debugLog("executeStartWithResume: step %q: Start() returned: %v", id, err)
 			}
 
-			// Handle error from Start() or ResumeStep()
 			if err != nil {
 				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
 					debugLog("executeStartWithResume: step %q: UpdateStepState failed: %v", id, stateErr)
@@ -394,16 +354,11 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id)
 				if !def.meta.hidden {
-					prog.Send(stepDoneMsg{
-						id:    id,
-						ok:    false,
-						label: def.effectiveLabel() + " failed: " + err.Error(),
-					})
+					prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
 				}
 				return
 			}
 
-			// Mark step as completed (skip if already completed from successful resume)
 			if !wasAlreadyCompleted {
 				if stateErr := UpdateStepState(sp, id, config.StepStatusCompleted, nil); stateErr != nil {
 					debugLog("executeStartWithResume: step %q: UpdateStepState completed: %v", id, stateErr)
@@ -414,11 +369,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				go def.meta.onReady()
 			}
 			if !def.meta.hidden {
-				prog.Send(stepDoneMsg{
-					id:    id,
-					ok:    true,
-					label: def.effectiveLabel() + " running",
-				})
+				prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 			}
 		}()
 	}

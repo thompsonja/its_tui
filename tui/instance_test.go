@@ -7,8 +7,8 @@ import (
 
 func TestRenderTopBar_NoInstance(t *testing.T) {
 	m := newModel(Config{})
-	m.width = 40
-	out := m.renderTopBar()
+	m.vs.width = 40
+	out := m.vs.renderTopBar(m.app)
 	if !strings.Contains(out, "no instance running") {
 		t.Fatalf("expected 'no instance running', got: %q", out)
 	}
@@ -16,9 +16,9 @@ func TestRenderTopBar_NoInstance(t *testing.T) {
 
 func TestRenderTopBar_WithInstance(t *testing.T) {
 	m := newModel(Config{})
-	m.width = 40
-	m.instanceName = "hello-world"
-	out := m.renderTopBar()
+	m.vs.width = 40
+	m.app.instanceName = "hello-world"
+	out := m.vs.renderTopBar(m.app)
 	if !strings.Contains(out, "hello-world") {
 		t.Fatalf("expected 'hello-world', got: %q", out)
 	}
@@ -28,9 +28,9 @@ func TestRenderTopBar_CustomStatusLine(t *testing.T) {
 	m := newModel(Config{
 		StatusLine: func(name string) string { return "custom:" + name },
 	})
-	m.width = 40
-	m.instanceName = "env"
-	out := m.renderTopBar()
+	m.vs.width = 40
+	m.app.instanceName = "env"
+	out := m.vs.renderTopBar(m.app)
 	if !strings.Contains(out, "custom:env") {
 		t.Fatalf("expected 'custom:env', got: %q", out)
 	}

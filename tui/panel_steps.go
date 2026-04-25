@@ -9,47 +9,41 @@ type commandStep struct {
 	bufIdx      int
 	done        bool
 	ok          bool
-	pending     bool     // waiting on a prerequisite; shows static ○ instead of spinner
-	pendingDeps []string // deps not yet completed; shrinks as deps finish
+	pending     bool
+	pendingDeps []string
 }
 
-// startStep appends a spinner line for the given step id and records its
-// buffer index so finishStep can update it in-place.
 func (m *model) startStep(id, label string) {
-	if m.steps == nil {
-		m.steps = map[string]*commandStep{}
+	if m.vs.steps == nil {
+		m.vs.steps = map[string]*commandStep{}
 	}
-	m.commandsBuf = appendLine(m.commandsBuf, "  ⠋ "+label)
-	m.steps[id] = &commandStep{
+	m.app.commandsBuf = appendLine(m.app.commandsBuf, "  ⠋ "+label)
+	m.vs.steps[id] = &commandStep{
 		label:  label,
-		bufIdx: len(m.commandsBuf) - 1,
+		bufIdx: len(m.app.commandsBuf) - 1,
 	}
-	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-	m.commandsVP.GotoBottom()
+	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
+	m.vs.commandsVP.GotoBottom()
 }
 
-// startPendingStep appends a static ○ line for a step that is waiting on
-// deps. The label is updated in-place as deps complete via stepDepReadyMsg.
 func (m *model) startPendingStep(id, label string, deps []string) {
-	if m.steps == nil {
-		m.steps = map[string]*commandStep{}
+	if m.vs.steps == nil {
+		m.vs.steps = map[string]*commandStep{}
 	}
 	line := "  ○ " + label + " (waiting for " + strings.Join(deps, ", ") + ")"
-	m.commandsBuf = appendLine(m.commandsBuf, line)
-	m.steps[id] = &commandStep{
+	m.app.commandsBuf = appendLine(m.app.commandsBuf, line)
+	m.vs.steps[id] = &commandStep{
 		label:       label,
-		bufIdx:      len(m.commandsBuf) - 1,
+		bufIdx:      len(m.app.commandsBuf) - 1,
 		pending:     true,
 		pendingDeps: append([]string(nil), deps...),
 	}
-	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
-	m.commandsVP.GotoBottom()
+	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
+	m.vs.commandsVP.GotoBottom()
 }
 
-// depReady removes dep from a pending step's waiting list and rewrites its
-// line. Called from the stepDepReadyMsg handler in Update.
 func (m *model) depReady(id, dep string) {
-	s, ok := m.steps[id]
+	s, ok := m.vs.steps[id]
 	if !ok {
 		return
 	}
@@ -63,15 +57,14 @@ func (m *model) depReady(id, dep string) {
 	if len(s.pendingDeps) > 0 {
 		line += " (waiting for " + strings.Join(s.pendingDeps, ", ") + ")"
 	}
-	if s.bufIdx < len(m.commandsBuf) {
-		m.commandsBuf[s.bufIdx] = line
+	if s.bufIdx < len(m.app.commandsBuf) {
+		m.app.commandsBuf[s.bufIdx] = line
 	}
-	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
+	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
 }
 
-// finishStep marks a step done, replacing its indicator with ✓ or ✗.
 func (m *model) finishStep(id string, ok bool, label string) {
-	s, exists := m.steps[id]
+	s, exists := m.vs.steps[id]
 	if !exists {
 		return
 	}
@@ -82,22 +75,19 @@ func (m *model) finishStep(id string, ok bool, label string) {
 	if !ok {
 		icon = "✗"
 	}
-	if s.bufIdx < len(m.commandsBuf) {
-		m.commandsBuf[s.bufIdx] = "  " + icon + " " + label
+	if s.bufIdx < len(m.app.commandsBuf) {
+		m.app.commandsBuf[s.bufIdx] = "  " + icon + " " + label
 	}
-	m.commandsVP.SetContent(wrapContent(m.commandsBuf, m.commandsVP.Width))
+	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
 
-	// Track startup completion
-	if ok && m.instanceName != "" {
-		m.completedSteps++
-		// When all steps complete, mark the instance as ready and display startup time
-		if m.completedSteps == m.totalSteps && m.totalSteps > 0 {
-			sp := m.statePath
+	if ok && m.app.instanceName != "" {
+		m.app.completedSteps++
+		if m.app.completedSteps == m.app.totalSteps && m.app.totalSteps > 0 {
+			sp := m.app.statePath
 			go func() {
 				if err := MarkReady(sp); err != nil {
 					debugLog("finishStep: MarkReady: %v", err)
 				}
-				// Send message to display startup time
 				prog.Send(allStepsReadyMsg{})
 			}()
 		}

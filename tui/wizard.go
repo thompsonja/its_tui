@@ -200,16 +200,14 @@ func (s *fieldState) toggleSysPicker(idx int) {
 	}
 }
 
-// newStartWizard creates a wizard driven by the templates in m.cfg.Steps.
+// newStartWizard creates a wizard driven by cfg.Steps.
 // initial, if non-empty, pre-populates fields from a previously saved session.
-func newStartWizard(m *model, initial WizardValues) *startWizard {
-	inputW := max(20, m.commandsVP.Width-16)
+func newStartWizard(cfg Config, commandsVPWidth int, initial WizardValues) *startWizard {
+	inputW := max(20, commandsVPWidth-16)
 
-	// Collect all fields from all templates, in template order.
-	// Track which template each field belongs to for visual grouping.
 	var fields []FieldSpec
 	var templateIdxs []int
-	for i, tmpl := range m.cfg.Steps {
+	for i, tmpl := range cfg.Steps {
 		for range tmpl.Fields {
 			templateIdxs = append(templateIdxs, i)
 		}
@@ -285,7 +283,7 @@ func newStartWizard(m *model, initial WizardValues) *startWizard {
 		fields:       fields,
 		states:       states,
 		templateIdxs: templateIdxs,
-		templates:    m.cfg.Steps,
+		templates:    cfg.Steps,
 	}
 }
 

@@ -3,14 +3,13 @@ package tui
 import tea "github.com/charmbracelet/bubbletea"
 
 func (m *model) handleWizardKey(msg tea.KeyMsg) {
-	wiz := m.wizard
+	wiz := m.vs.wizard
 	if wiz == nil {
 		return
 	}
 	key := msg.String()
 	numFields := len(wiz.states)
 
-	// Tab / Shift+Tab: close picker when open, else cycle fields.
 	switch key {
 	case "tab":
 		if wiz.anyPickerOpen() {
@@ -65,7 +64,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 			if wiz.confirmIdx == 0 {
 				m.executeStartFromWizard()
 			}
-			m.flipTarget = 0.0
+			m.vs.flipTarget = 0.0
 		}
 		return
 	}

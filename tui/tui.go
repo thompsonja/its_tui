@@ -128,8 +128,9 @@ func StaticSystems(systems ...System) func(WizardValues) []System {
 
 // WizardValues holds the collected user selections from the wizard.
 type WizardValues struct {
-	str  map[string]string
-	strs map[string][]string
+	str       map[string]string
+	strs      map[string][]string
+	isRestore bool // true when called from the session-restore path, not the wizard
 }
 
 // String returns the string value for the field with the given ID.
@@ -137,6 +138,12 @@ func (v WizardValues) String(id string) string { return v.str[id] }
 
 // Strings returns the slice value for the field with the given ID.
 func (v WizardValues) Strings(id string) []string { return v.strs[id] }
+
+// IsRestore reports whether Build() is being called during a session restore
+// (TUI restart with existing state) rather than from a fresh wizard submission.
+// Generator templates can use this to skip re-running expensive generation
+// that would produce the same output as the previous run.
+func (v WizardValues) IsRestore() bool { return v.isRestore }
 
 // NewWizardValues constructs a WizardValues from explicit maps.
 // Useful in tests and in Build functions that delegate to sub-builders.
@@ -392,7 +399,7 @@ func Run(cfg Config) error {
 
 	debugLog("Run: creating model")
 	m := newModel(cfg)
-	m.statePath = statePath
+	m.app.statePath = statePath
 
 	if state.Theme != "" {
 		for _, t := range presets {
@@ -404,7 +411,7 @@ func Run(cfg Config) error {
 	}
 
 	if len(state.CommandHistory) > 0 {
-		m.cmdHistory = append(m.cmdHistory, state.CommandHistory...)
+		m.app.cmdHistory = append(m.app.cmdHistory, state.CommandHistory...)
 	}
 
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
@@ -414,23 +421,23 @@ func Run(cfg Config) error {
 	var restoreDefs []StepDef
 	var restoreName string
 	if state.Instance != nil && state.Instance.StartedAt != "" {
-		restoreName = m.configuredName()
-		m.instanceName = restoreName
-		m.fullscreenProgress = 0
-		m.fullscreenTarget = 0
+		restoreName = m.app.configuredName()
+		m.app.instanceName = restoreName
+		m.vs.fullscreenProgress = 0
+		m.vs.fullscreenTarget = 0
 		restoreDefs = m.buildPipelineFromState(restoreName, state.Instance)
-		m.activeDefs = restoreDefs // Store for use by stop command
-		m.registerPipeline(restoreDefs)
+		m.app.activeDefs = restoreDefs
+		m.app.registerPipeline(restoreDefs)
 
 		// Restore active tab indices for each panel
 		for i := 0; i < 3; i++ {
-			if state.Instance.PanelTabs[i] < len(m.panels[i].defs) {
-				m.panels[i].activeIdx = state.Instance.PanelTabs[i]
+			if state.Instance.PanelTabs[i] < len(m.app.panels[i].defs) {
+				m.app.panels[i].activeIdx = state.Instance.PanelTabs[i]
 			}
 		}
 
 		for _, dp := range state.Instance.ForwardedPorts {
-			m.fwdPorts = append(m.fwdPorts, step.DebugPortMsg{
+			m.app.fwdPorts = append(m.app.fwdPorts, step.DebugPortMsg{
 				LocalPort:    dp.LocalPort,
 				RemotePort:   dp.RemotePort,
 				ResourceName: dp.ResourceName,
@@ -439,7 +446,7 @@ func Run(cfg Config) error {
 			})
 		}
 		for _, dp := range state.Instance.DebugPorts {
-			m.debugPorts = append(m.debugPorts, step.DebugPortMsg{
+			m.app.debugPorts = append(m.app.debugPorts, step.DebugPortMsg{
 				LocalPort:    dp.LocalPort,
 				RemotePort:   dp.RemotePort,
 				ResourceName: dp.ResourceName,
@@ -456,7 +463,7 @@ func Run(cfg Config) error {
 	step.SetSender(sender)
 	debugLog("Run: program created, sender configured")
 
-	// Inject sender into restored steps for per-step testability.
+	// Inject sender into restored steps.
 	for _, def := range restoreDefs {
 		if s, ok := def.Step.(step.Sender); ok {
 			s.SetSender(sender)
@@ -466,7 +473,10 @@ func Run(cfg Config) error {
 	// Restore the instance using executeStartWithResume to properly handle step states.
 	// This checks saved state for each step and skips/retries/restarts as appropriate.
 	if len(restoreDefs) > 0 && state.Instance != nil && state.Instance.StepStates != nil {
-		debugLog("Run: restoring session with %d steps", len(restoreDefs))
+		debugLog("Run: restoring session with %d steps (startup path)", len(restoreDefs))
+		for sid, ss := range state.Instance.StepStates {
+			debugLog("Run: restore state: step=%q status=%s", sid, ss.Status)
+		}
 		m.executeStartWithResume(restoreDefs, state.Instance.StepStates)
 
 		// Start watchers for all steps with visible panels.
@@ -475,14 +485,13 @@ func Run(cfg Config) error {
 				continue
 			}
 			id := def.Step.ID()
-			if e, ok := m.stepCtxs[id]; ok {
+			if e, ok := m.app.stepCtxs[id]; ok {
 				go step.WatchStep(e.ctx, def.Step, restoreName)
 			}
 		}
 
 		// Automatically show status on resume
 		go func() {
-			// Give the TUI a moment to initialize before sending the status command
 			p.Send(autoStatusMsg{})
 		}()
 	}
