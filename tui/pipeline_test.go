@@ -848,6 +848,148 @@ func TestReEvalDynamicFields_OptionsFunc_ClearsSingleValueIfGone(t *testing.T) {
 	}
 }
 
+func TestReEvalDynamicFields_MergeValuesFunc_AddsValues(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+				singleValue:     "suite-a",
+			},
+			{
+				spec: FieldSpec{
+					ID:          "components",
+					Kind:        FieldKindSystemSelect,
+					SystemsFunc: StaticSystems(System{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}),
+					MergeValuesFunc: func(v WizardValues) []string {
+						if v.String("suite") == "suite-a" {
+							return []string{"comp-x", "comp-y"}
+						}
+						return nil
+					},
+				},
+				resolvedSystems: []System{{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}},
+				sysPickerItems: []pickerItem{
+					{isSystem: true, system: "sys"},
+					{isSystem: false, system: "sys", comp: "comp-x"},
+					{isSystem: false, system: "sys", comp: "comp-y"},
+					{isSystem: false, system: "sys", comp: "comp-z"},
+				},
+			},
+		},
+	}
+
+	wiz.reEvalDynamicFields()
+
+	got := wiz.states[1].multiValues
+	if len(got) != 2 || got[0] != "comp-x" || got[1] != "comp-y" {
+		t.Fatalf("expected [comp-x comp-y], got %v", got)
+	}
+}
+
+func TestReEvalDynamicFields_MergeValuesFunc_RemovesOldAutoValues(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+				singleValue:     "suite-a",
+			},
+			{
+				spec: FieldSpec{
+					ID:          "components",
+					Kind:        FieldKindSystemSelect,
+					SystemsFunc: StaticSystems(System{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}),
+					MergeValuesFunc: func(v WizardValues) []string {
+						switch v.String("suite") {
+						case "suite-a":
+							return []string{"comp-x", "comp-y"}
+						case "suite-b":
+							return []string{"comp-z"}
+						}
+						return nil
+					},
+				},
+				resolvedSystems: []System{{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}},
+				sysPickerItems: []pickerItem{
+					{isSystem: true, system: "sys"},
+					{isSystem: false, system: "sys", comp: "comp-x"},
+					{isSystem: false, system: "sys", comp: "comp-y"},
+					{isSystem: false, system: "sys", comp: "comp-z"},
+				},
+			},
+		},
+	}
+
+	// First eval with suite-a: auto-selects comp-x, comp-y.
+	wiz.reEvalDynamicFields()
+	if got := wiz.states[1].multiValues; len(got) != 2 {
+		t.Fatalf("after suite-a: expected 2 auto values, got %v", got)
+	}
+
+	// Switch to suite-b: comp-x, comp-y removed; comp-z added.
+	wiz.states[0].singleValue = "suite-b"
+	wiz.reEvalDynamicFields()
+
+	got := wiz.states[1].multiValues
+	if len(got) != 1 || got[0] != "comp-z" {
+		t.Fatalf("after suite-b: expected [comp-z], got %v", got)
+	}
+}
+
+func TestReEvalDynamicFields_MergeValuesFunc_PreservesManualSelections(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+				singleValue:     "suite-a",
+			},
+			{
+				spec: FieldSpec{
+					ID:          "components",
+					Kind:        FieldKindSystemSelect,
+					SystemsFunc: StaticSystems(System{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}),
+					MergeValuesFunc: func(v WizardValues) []string {
+						if v.String("suite") == "suite-a" {
+							return []string{"comp-x"}
+						}
+						return nil
+					},
+				},
+				resolvedSystems: []System{{Name: "sys", Components: []Component{{Name: "comp-x"}, {Name: "comp-y"}, {Name: "comp-z"}}}},
+				multiValues:     []string{"comp-z"}, // manually selected
+				sysPickerItems: []pickerItem{
+					{isSystem: true, system: "sys"},
+					{isSystem: false, system: "sys", comp: "comp-x"},
+					{isSystem: false, system: "sys", comp: "comp-y"},
+					{isSystem: false, system: "sys", comp: "comp-z"},
+				},
+			},
+		},
+	}
+
+	wiz.reEvalDynamicFields()
+
+	got := wiz.states[1].multiValues
+	// comp-z (manual) preserved, comp-x (auto) added.
+	if len(got) != 2 || got[0] != "comp-z" || got[1] != "comp-x" {
+		t.Fatalf("expected [comp-z comp-x], got %v", got)
+	}
+
+	// Switch to suite-b (no deps): comp-x removed, comp-z preserved.
+	wiz.states[0].singleValue = "suite-b"
+	wiz.reEvalDynamicFields()
+
+	got = wiz.states[1].multiValues
+	if len(got) != 1 || got[0] != "comp-z" {
+		t.Fatalf("after clearing suite: expected [comp-z], got %v", got)
+	}
+}
+
 // ── topoSortSteps ────────────────────────────────────────────────────────
 
 func TestTopoSortSteps_Empty(t *testing.T) {

@@ -112,6 +112,14 @@ type FieldSpec struct {
 	OptionsFunc func(WizardValues) []string // provides choices for Select / SingleSelect / MultiSelect
 	SystemsFunc func(WizardValues) []System // provides hierarchy for SystemSelect
 	Default     int                         // for Select: index of the default option
+
+	// MergeValuesFunc, if non-nil, is called during reEvalDynamicFields for
+	// MultiSelect/SystemSelect fields. Returns values that should be
+	// force-selected based on the current wizard state. When the returned
+	// set changes (e.g. because a driving field changed), previously
+	// auto-merged values are removed and new ones added. Manual selections
+	// are never affected.
+	MergeValuesFunc func(WizardValues) []string
 }
 
 // StaticOptions returns an OptionsFunc that always returns the given options.

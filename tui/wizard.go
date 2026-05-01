@@ -41,6 +41,11 @@ type fieldState struct {
 	// static slice). Filter functions use these instead of re-reading the spec.
 	resolvedSystems []System
 	resolvedOptions []string
+
+	// lastAutoValues tracks values that were auto-merged by MergeValuesFunc
+	// on the last reEvalDynamicFields call. Used to diff when the driving
+	// field changes so old auto-values can be removed.
+	lastAutoValues map[string]bool
 }
 
 // startWizard drives the instance-start configuration screen.
@@ -279,12 +284,17 @@ func newStartWizard(cfg Config, commandsVPWidth int, initial WizardValues) *star
 		states[i] = s
 	}
 
-	return &startWizard{
+	wiz := &startWizard{
 		fields:       fields,
 		states:       states,
 		templateIdxs: templateIdxs,
 		templates:    cfg.Steps,
 	}
+
+	// Apply initial MergeValuesFunc so auto-values are present from the start.
+	wiz.reEvalDynamicFields()
+
+	return wiz
 }
 
 // reEvalDynamicFields re-calls all OptionsFunc/SystemsFunc with the current
@@ -312,6 +322,7 @@ func (w *startWizard) reEvalDynamicFields() {
 				}
 			}
 			s.multiValues = filtered
+			s.applyMergeValues(vals, valid)
 			// Rebuild picker items and re-apply current search filter.
 			s.sysPickerItems = s.sysPickerItems[:0]
 			for _, sys := range newSystems {
@@ -361,11 +372,48 @@ func (w *startWizard) reEvalDynamicFields() {
 					}
 				}
 				s.multiValues = filtered
+				s.applyMergeValues(vals, valid)
 			}
 			s.strPickerItems = append([]string(nil), newOpts...)
 			s.updateStrFilter()
 		}
 	}
+}
+
+// applyMergeValues calls spec.MergeValuesFunc and diffs the result against
+// lastAutoValues. Values no longer in the set are removed from multiValues;
+// new values are added (if they pass the valid filter). Manual selections
+// are never touched.
+func (s *fieldState) applyMergeValues(vals WizardValues, valid map[string]bool) {
+	if s.spec.MergeValuesFunc == nil {
+		return
+	}
+	raw := s.spec.MergeValuesFunc(vals)
+	newAutoSet := make(map[string]bool, len(raw))
+	for _, v := range raw {
+		newAutoSet[v] = true
+	}
+
+	// Remove values that were previously auto-merged but are no longer needed.
+	if len(s.lastAutoValues) > 0 {
+		filtered := s.multiValues[:0]
+		for _, v := range s.multiValues {
+			if s.lastAutoValues[v] && !newAutoSet[v] {
+				continue
+			}
+			filtered = append(filtered, v)
+		}
+		s.multiValues = filtered
+	}
+
+	// Add new auto-values that aren't already selected.
+	for _, v := range raw {
+		if (valid == nil || valid[v]) && !s.isMultiSelected(v) {
+			s.multiValues = append(s.multiValues, v)
+		}
+	}
+
+	s.lastAutoValues = newAutoSet
 }
 
 // syncFocus focuses the active picker search input and blurs all others.
