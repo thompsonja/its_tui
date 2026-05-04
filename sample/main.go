@@ -22,10 +22,6 @@ func sampleDir() string {
 }
 
 func main() {
-	// Shared skaffold config: the generator populates this, and both the
-	// build and dev steps read from it.
-	skaffoldCfg := &builtins.SkaffoldConfig{}
-
 	// env step: contributes the "env" and "api_port" selector fields to
 	// the wizard. It does not start a process of its own — the selected
 	// values are read by the skaffold generate callback below.
@@ -115,15 +111,11 @@ func main() {
 		},
 	}
 
-	// Skaffold file generator: generates the skaffold.yaml once and
-	// populates skaffoldCfg with the path and profiles. This allows
-	// both the build and dev steps below to use the same file without
-	// generating it twice.
-	skaffoldGeneratorStep := builtins.SkaffoldFileGeneratorTemplate(skaffoldCfg,
+	// Skaffold pipeline: generates the skaffold.yaml once and shares it
+	// between the build and dev steps. DevTemplate automatically waits
+	// for BuildTemplate when both are registered.
+	skaffoldPipeline := builtins.NewSkaffoldPipeline(
 		func(v tui.WizardValues) (string, []string, error) {
-			// Generate a skaffold.yaml with the selected port and env profile.
-			// The "components" field from the step above is available in v but
-			// not used in this simple example.
 			env := v.String("env")
 			port := v.String("api_port")
 			if port == "" {
@@ -132,14 +124,6 @@ func main() {
 			return generateSkaffoldYAML(sampleDir(), env, port)
 		},
 	)
-	// Skaffold build step: runs `skaffold build` using the generated config
-	skaffoldBuildStep := builtins.SkaffoldBuildTemplateFrom(skaffoldCfg)
-
-	// Skaffold dev step: runs `skaffold dev/run/debug` using the generated config
-	skaffoldStep := builtins.SkaffoldTemplateFrom(skaffoldCfg)
-
-	// dev/run/debug should wait for the build step
-	skaffoldStep.WaitFor = []string{skaffoldBuildStep.ID}
 
 	mfeStep := builtins.MFETemplate(
 		[]string{
@@ -165,17 +149,17 @@ func main() {
 		},
 	)
 
+	steps := []tui.StepTemplate{
+		builtins.MinikubeTemplate(),
+		builtins.KubectlTemplate(),
+		envStep,
+		componentsStep,
+	}
+	steps = append(steps, skaffoldPipeline.Templates()...)
+	steps = append(steps, mfeStep)
+
 	cfg := tui.Config{
-		Steps: []tui.StepTemplate{
-			builtins.MinikubeTemplate(),
-			builtins.KubectlTemplate(),
-			envStep,
-			componentsStep,
-			skaffoldGeneratorStep,
-			skaffoldBuildStep,
-			skaffoldStep,
-			mfeStep,
-		},
+		Steps: steps,
 		Tests: []tui.TestTemplate{
 			{
 				Label: "API",

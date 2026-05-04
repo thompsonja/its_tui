@@ -51,8 +51,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if newP, settled := advanceAnim(m.vs.flipProgress, m.vs.flipTarget, flipStep); newP != m.vs.flipProgress {
 			m.vs.flipProgress = newP
 			if settled && m.vs.flipTarget == 0 {
-				m.vs.overlay = overlayNone
-				m.vs.wizard = nil
+				m.app.overlay = overlayNone
+				m.app.wizard = nil
 			}
 		}
 		// Advance fullscreen animation.
@@ -137,7 +137,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}()
 		if isDebugPortName(msg.PortName) {
 			ports := append([]step.DebugPortMsg(nil), m.app.debugPorts...)
-			instanceName := m.app.instanceName
+			instanceName := m.app.inst.name
 			workspaceDir := m.app.workspaceDir
 			go func() {
 				if err := updateVSCodeLaunchJSON(workspaceDir, instanceName, ports); err != nil {
@@ -171,7 +171,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case autoStatusMsg:
-		m.dispatchCommand("status")
+		if c := m.dispatchCommand("status"); c != nil {
+			cmds = append(cmds, c)
+		}
 
 	case allStepsReadyMsg:
 		sp := m.app.statePath
@@ -219,7 +221,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vs.fullscreenTarget = 1
 
 	case clearActiveDefsMsg:
-		m.app.activeDefs = nil
+		m.app.inst.activeDefs = nil
 
 	// ── Key handling ──────────────────────────────────────────────────────────
 
@@ -229,7 +231,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "ctrl+f":
-			if m.app.instanceName != "" {
+			if m.app.inst.name != "" {
 				if m.vs.fullscreenTarget == 1 {
 					m.vs.fullscreenTarget = 0
 				} else {
@@ -239,11 +241,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "esc":
-			if m.vs.wizard != nil && m.vs.wizard.anyPickerOpen() {
-				if s := m.vs.wizard.activeState(); s != nil {
+			if m.app.wizard != nil && m.app.wizard.anyPickerOpen() {
+				if s := m.app.wizard.activeState(); s != nil {
 					s.pickerOpen = false
 				}
-				m.vs.wizard.syncFocus()
+				m.app.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
 			if m.vs.flipTarget == 1.0 {
@@ -256,14 +258,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "tab":
-			if m.vs.wizard != nil && m.vs.wizard.anyPickerOpen() {
-				if s := m.vs.wizard.activeState(); s != nil {
+			if m.app.wizard != nil && m.app.wizard.anyPickerOpen() {
+				if s := m.app.wizard.activeState(); s != nil {
 					s.pickerOpen = false
 				}
-				m.vs.wizard.syncFocus()
+				m.app.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
-			if m.app.instanceName != "" {
+			if m.app.inst.name != "" {
 				if m.vs.flipTarget == 1.0 {
 					m.vs.flipTarget = 0.0
 				}
@@ -272,14 +274,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 
 		case "shift+tab":
-			if m.vs.wizard != nil && m.vs.wizard.anyPickerOpen() {
-				if s := m.vs.wizard.activeState(); s != nil {
+			if m.app.wizard != nil && m.app.wizard.anyPickerOpen() {
+				if s := m.app.wizard.activeState(); s != nil {
 					s.pickerOpen = false
 				}
-				m.vs.wizard.syncFocus()
+				m.app.wizard.syncFocus()
 				return m, tea.Batch(cmds...)
 			}
-			if m.app.instanceName != "" {
+			if m.app.inst.name != "" {
 				if m.vs.flipTarget == 1.0 {
 					m.vs.flipTarget = 0.0
 				}
@@ -292,20 +294,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch m.vs.focused {
 			case panelCommands:
 				if m.vs.flipTarget == 1.0 {
-					switch m.vs.overlay {
+					switch m.app.overlay {
 					case overlayHelp:
 						m.vs.helpOverlayVP, cmd = m.vs.helpOverlayVP.Update(msg)
 					case overlayWizard:
 						m.handleWizardKey(msg)
-						if m.vs.wizard != nil {
-							m.vs.wizard.reEvalDynamicFields()
+						if m.app.wizard != nil {
+							m.app.wizard.reEvalDynamicFields()
 						}
 					}
 				} else if msg.String() == "enter" {
 					if line := m.vs.input.Value(); line != "" {
 						m.vs.input.Reset()
 						m.addToHistory(line)
-						m.dispatchCommand(line)
+						cmd = m.dispatchCommand(line)
 					}
 				} else if msg.String() == "up" {
 					m.historyUp()
@@ -365,7 +367,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.vs.testVP.SetContent(wrapContent(m.app.testBuf, m.vs.testVP.Width))
 						m.vs.testVP.GotoBottom()
 					}
-					if m.app.instanceName != "" {
+					if m.app.inst.name != "" {
 						sp := m.app.statePath
 						tabs := [3]int{m.app.panels[0].activeIdx, m.app.panels[1].activeIdx, m.app.panels[2].activeIdx}
 						go func() {

@@ -13,7 +13,7 @@ import (
 // executeStartFromWizard handles the start command initiated from the wizard.
 func (m *model) executeStartFromWizard() {
 	debugLog("executeStartFromWizard: called")
-	wiz := m.vs.wizard
+	wiz := m.app.wizard
 	if wiz == nil {
 		debugLog("executeStartFromWizard: wizard not initialized")
 		m.printLine("  internal error: wizard not initialized")
@@ -80,7 +80,7 @@ func (m *model) executeStartFromWizard() {
 	}
 
 	m.switchToInstance(name)
-	m.app.activeDefs = defs
+	m.app.inst.activeDefs = defs
 	m.app.registerPipeline(defs)
 	m.vs.fullscreenTarget = 0
 
@@ -104,7 +104,7 @@ func (m *model) executeStartFromWizard() {
 			continue
 		}
 		id := def.Step.ID()
-		if e, ok := m.app.stepCtxs[id]; ok {
+		if e, ok := m.app.inst.stepCtxs[id]; ok {
 			go step.WatchStep(e.ctx, def.Step, name)
 		}
 	}
@@ -158,16 +158,16 @@ func (m *model) executeStart(defs []StepDef) {
 	ctx := instanceCtx
 
 	m.vs.steps = map[string]*commandStep{}
-	m.app.stepCtxs = make(map[string]stepEntry)
-	name := m.app.instanceName
+	m.app.inst.stepCtxs = make(map[string]stepEntry)
+	name := m.app.inst.name
 	sp := m.app.statePath
 	debugLog("executeStart: instance name=%q", name)
 
-	m.app.completedSteps = 0
-	m.app.totalSteps = 0
+	m.app.inst.completedSteps = 0
+	m.app.inst.totalSteps = 0
 	for _, def := range defs {
 		if !def.meta.hidden {
-			m.app.totalSteps++
+			m.app.inst.totalSteps++
 		}
 	}
 
@@ -176,7 +176,7 @@ func (m *model) executeStart(defs []StepDef) {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
 		stepCtx, stepCancel := context.WithCancel(ctx)
-		m.app.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+		m.app.inst.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
 	sortedDefs := topoSortSteps(defs)
@@ -195,7 +195,7 @@ func (m *model) executeStart(defs []StepDef) {
 	for _, def := range defs {
 		def := def
 		id := def.Step.ID()
-		stepCtx := m.app.stepCtxs[id].ctx
+		stepCtx := m.app.inst.stepCtxs[id].ctx
 		go func() {
 			debugLog("executeStart: step %q: waiting for dependencies: %v", id, def.meta.waitFor)
 			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
@@ -246,15 +246,15 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	ctx := instanceCtx
 
 	m.vs.steps = map[string]*commandStep{}
-	m.app.stepCtxs = make(map[string]stepEntry)
-	name := m.app.instanceName
+	m.app.inst.stepCtxs = make(map[string]stepEntry)
+	name := m.app.inst.name
 	sp := m.app.statePath
 
-	m.app.completedSteps = 0
-	m.app.totalSteps = 0
+	m.app.inst.completedSteps = 0
+	m.app.inst.totalSteps = 0
 	for _, def := range defs {
 		if !def.meta.hidden {
-			m.app.totalSteps++
+			m.app.inst.totalSteps++
 		}
 	}
 
@@ -263,7 +263,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
 		stepCtx, stepCancel := context.WithCancel(ctx)
-		m.app.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+		m.app.inst.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	}
 
 	resumeActions := make(map[string]ResumeAction)
@@ -298,7 +298,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		def := def
 		id := def.Step.ID()
 		action := resumeActions[id]
-		stepCtx := m.app.stepCtxs[id].ctx
+		stepCtx := m.app.inst.stepCtxs[id].ctx
 		debugLog("executeStartWithResume: step %q action=%s", id, action)
 
 		go func() {

@@ -153,6 +153,88 @@ func TestSkaffoldTemplateFrom_SharedConfig(t *testing.T) {
 	}
 }
 
+func TestSkaffoldPipeline(t *testing.T) {
+	generateCalls := 0
+	pipeline := NewSkaffoldPipeline(func(v tui.WizardValues) (string, []string, error) {
+		generateCalls++
+		return "/generated/skaffold.yaml", []string{"dev"}, nil
+	})
+
+	templates := pipeline.Templates()
+	if len(templates) != 3 {
+		t.Fatalf("expected 3 templates, got %d", len(templates))
+	}
+
+	// Run the generator's Build to populate the shared config.
+	values := tui.NewWizardValues(nil, nil)
+	genStep, err := templates[0].Build(values)
+	if err != nil {
+		t.Fatalf("generator Build failed: %v", err)
+	}
+	if genStep != nil {
+		t.Errorf("generator Build should return nil step, got %T", genStep)
+	}
+	if generateCalls != 1 {
+		t.Errorf("expected generate to be called once, got %d", generateCalls)
+	}
+
+	// Build and dev templates should pick up the generated config.
+	buildStep, err := templates[1].Build(values)
+	if err != nil {
+		t.Fatalf("build template Build failed: %v", err)
+	}
+	if buildStep == nil {
+		t.Fatal("expected non-nil build step")
+	}
+	if buildStep.(*SkaffoldStep).Mode != "build" {
+		t.Errorf("expected build mode, got %q", buildStep.(*SkaffoldStep).Mode)
+	}
+
+	devStep, err := templates[2].Build(values)
+	if err != nil {
+		t.Fatalf("dev template Build failed: %v", err)
+	}
+	if devStep == nil {
+		t.Fatal("expected non-nil dev step")
+	}
+	if devStep.(*SkaffoldStep).Mode != "dev" {
+		t.Errorf("expected dev mode, got %q", devStep.(*SkaffoldStep).Mode)
+	}
+
+	// DevTemplate should wait for both minikube and skaffold_build.
+	devTemplate := templates[2]
+	wantDeps := map[string]bool{"minikube": false, "skaffold_build": false}
+	for _, dep := range devTemplate.WaitFor {
+		wantDeps[dep] = true
+	}
+	for dep, found := range wantDeps {
+		if !found {
+			t.Errorf("DevTemplate WaitFor missing %q", dep)
+		}
+	}
+}
+
+func TestSkaffoldPipeline_DevOnlyNoBuild(t *testing.T) {
+	pipeline := NewSkaffoldPipeline(func(v tui.WizardValues) (string, []string, error) {
+		return "/gen/skaffold.yaml", nil, nil
+	})
+
+	// Populate config via generator.
+	values := tui.NewWizardValues(nil, nil)
+	if _, err := pipeline.GeneratorTemplate().Build(values); err != nil {
+		t.Fatalf("generator failed: %v", err)
+	}
+
+	// DevTemplate should still build without error even without BuildTemplate registered.
+	devStep, err := pipeline.DevTemplate().Build(values)
+	if err != nil {
+		t.Fatalf("dev template Build failed: %v", err)
+	}
+	if devStep == nil {
+		t.Fatal("expected non-nil dev step")
+	}
+}
+
 func TestSkaffoldTemplateFrom_EmptyConfig(t *testing.T) {
 	// Create templates with an empty config (generator not run yet)
 	cfg := &SkaffoldConfig{}

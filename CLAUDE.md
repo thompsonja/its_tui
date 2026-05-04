@@ -18,21 +18,23 @@ sample/       — example binary wiring Config with builtins
 
 The Bubbletea `tea.Model` shim is `model` in `model.go`. It is split into two sub-structs:
 
-- **`appState`** (`appstate.go`) — domain state: config, panels, log buffers, step contexts, wizard values, port lists. Independent of rendering.
-- **`viewState`** (`viewstate.go`) — ephemeral display state: viewports, animations, overlays, the wizard pointer, search mode. Derived from appState on demand.
+- **`appState`** (`appstate.go`) — domain state: config, panels, log buffers, step contexts, overlay kind, wizard pointer, port lists. Independent of rendering.
+- **`viewState`** (`viewstate.go`) — ephemeral display state: viewports, animations, search state. Derived from appState on demand.
 
 `model.app` is the source of truth; `model.vs` is what gets rendered.
 
 The 60fps tick (`tickCmd`) drives spinner frames and card-flip / fullscreen animations.
+
+`dispatchCommand` returns `tea.Cmd` so command handlers can schedule Bubbletea effects. Currently all built-in handlers return `nil` (they use goroutines + `prog.Send`), but the signature allows future handlers to emit proper `tea.Cmd` values.
 
 ## Key file map
 
 | File | Purpose |
 |---|---|
 | `tui/tui.go` | Public API: `Config`, `StepTemplate`, `FieldSpec`, `WizardValues`, `PanelID`, `Run()`, type aliases |
-| `tui/model.go` | `model` struct + `newModel` + `Init` + `cycleFocus` + `resizePanels` |
-| `tui/appstate.go` | `appState`, `panelView`, `focusedPanelID`, buffer helpers |
-| `tui/viewstate.go` | `viewState`, `resize`, all render methods, wizard render helpers |
+| `tui/model.go` | `model` struct + `newModel` + `Init` + `cycleFocus` + `resizePanels` + `refreshFocusedPanel` |
+| `tui/appstate.go` | `appState`, `instanceRuntime`, `panelView`, `stepEntry`, `focusedPanelID`, buffer helpers |
+| `tui/viewstate.go` | `viewState`, `resize`, all render methods, `wrapContentSearch` |
 | `tui/update.go` | `Update()` — message dispatch, animation advances, log ingestion |
 | `tui/view.go` | `View()` shim (delegates to `vs.render`), `appendToVP` |
 | `tui/messages.go` | All internal message types (`tickMsg`, `stepDoneMsg`, etc.) |
@@ -45,7 +47,9 @@ The 60fps tick (`tickCmd`) drives spinner frames and card-flip / fullscreen anim
 | `tui/history.go` | REPL history (up/down arrows) |
 | `tui/styles.go` | Panel/title styles |
 | `tui/themes.go` | `Theme` struct, presets, `currentTheme` global |
-| `step/step.go` | `Step` interface, `WatchStep`, `ResumeStep`, `Sender` interface |
+| `tui/log.go` | Debug log init/write/close (`~/.tui/debug.log`) |
+| `tui/debug.go` | Clipboard helper, VSCode launch.json management, debug port utilities |
+| `step/step.go` | `Step` interface, `WatchStep`, `ResumeStep`, `Stopper`/`Resumer`/`Sender` optional interfaces |
 | `step/messages.go` | `LineMsg`, `SetMsg`, `DebugPortMsg` sent from goroutines → TUI |
 | `config/state.go` | `State`, `InstanceState`, `StepState`, `SaveInstanceState`, `LoadState` |
 | `config/config.go` | `System`, `Component`, `ComponentsFile` catalogue types |
@@ -63,6 +67,8 @@ Commands panel     | PanelBottomRight (2)
 Focus cycles through four constants: `panelMinikube`, `panelSkaffold`, `panelCommands`, `panelMFE`. These map to PanelIDs via `focusedPanelID()`.
 
 Each content panel can host multiple steps. The `panelView` struct holds `defs []StepDef`, `bufs [][]string` (one log buffer per step), and `activeIdx` (which step is visible). Press `t` to cycle tabs within a panel.
+
+`PanelNone` (`PanelID = -1`) assigns a step to no panel: it runs but produces no visible output and no tab.
 
 ## Streaming log flow
 
@@ -84,7 +90,9 @@ Field kinds:
 - `FieldKindSystemSelect` — hierarchical system/component picker
 - `FieldKindText` — free text
 
-`FieldSpec.OptionsFunc` / `SystemsFunc` are called with current `WizardValues` so fields can be dynamic. `reEvalDynamicFields` is called after every change.
+`FieldSpec.Options []string` provides a static option list for Select/SingleSelect/MultiSelect fields. `FieldSpec.OptionsFunc` provides dynamic options and takes precedence over `Options` when both are set. `SystemsFunc` is always required for SystemSelect. `reEvalDynamicFields` is called after every change.
+
+The `overlay overlayKind` and `wizard *startWizard` fields live in `appState` (domain state), not `viewState`. The wizard pointer is model state that persists across render cycles; the overlay kind determines which UI mode is active.
 
 ## Step lifecycle
 
@@ -98,6 +106,18 @@ Field kinds:
 
 `StepDef.meta.waitFor` is a `[]string` of step IDs. `topoSortSteps` does Kahn's algorithm to order execution so the Commands panel renders deps in dependency order.
 
+Per-instance execution state is grouped in `instanceRuntime`:
+```go
+type instanceRuntime struct {
+    name           string
+    activeDefs     []StepDef
+    stepCtxs       map[string]stepEntry
+    completedSteps int
+    totalSteps     int
+}
+```
+Access via `m.app.inst.*`.
+
 ## Session persistence
 
 State lives at `DefaultStatePath()` (typically `~/.tui/state.json`). `InstanceState` stores:
@@ -110,6 +130,10 @@ On resume, `buildPipelineFromState` reconstructs defs from saved values, then `e
 - `completed` → skip (unless `Resumer.Resume()` returns error)
 - `failed` → retry via `Start()`
 - `running` / `pending` → restart via `Start()`
+
+`wizardValuesFromState` sets `isRestore: true` on the returned `WizardValues`. `Build()` implementations can call `values.IsRestore()` to detect the session-restore path and skip expensive re-generation (e.g. writing a new skaffold.yaml) when they can reuse previously saved state.
+
+**Important:** `SaveInstanceState` replaces the entire `InstanceState` struct. Any call site that invokes `SaveInstanceState` must first load and carry forward `StepData` to avoid clobbering data written by `Build()` calls. See `executeStartFromWizard` for the pattern.
 
 ### StepData — per-step key-value storage
 
@@ -128,13 +152,25 @@ config.GetStepData(statePath, stepID string) map[string]string
 
 Steps that complete and don't need resuming (e.g., one-shot `skaffold build`) should not save a PID — their `Resume()` simply returns `nil`.
 
+**Generator cache pattern** (used by `SkaffoldFileGeneratorTemplate` / `SkaffoldPipeline`):
+- In `Build()`, check `values.IsRestore()`. If true, load the previously generated file path from `StepData` and skip re-generation if the file still exists.
+- On a fresh run, generate the file and save its path to `StepData` so the next restore can find it.
+- Return `(nil, nil)` from `Build()` to indicate this is a side-effect-only step with no running process.
+
+## VSCode launch.json management
+
+When debug ports are forwarded, the TUI writes `attach` launch configurations into `.vscode/launch.json` inside `Config.WorkspaceDir`. All TUI-managed entries are prefixed with `its_tui_<instanceName> ` so they can be identified and removed cleanly on `stop`.
+
+This is a no-op when `WorkspaceDir` is empty or when no `.vscode` directory exists there.
+
 ## Adding a new step template
 
-1. Implement `step.Step` in a new file (or in `builtins/`).
+1. Implement `step.Step` (or the equivalent `tui.Step` alias) in a new file (or in `builtins/`). Custom steps only need to import `tui` for the interface; `step` and `config` are only needed for `step.Send` / `step.SetMsg` and state persistence.
 2. Write a `StepTemplate` constructor function with `Fields`, `Panel`, `Label`, `WaitFor`, and `Build`. Pass `StatePath: config.DefaultStatePath()` when constructing the step so it can access state.json.
-3. If the step needs resume customization, implement `step.Resumer`. Long-running processes should save their PID via `config.SaveStepData` and check liveness in `Resume()`. One-shot steps (steps that complete and leave no process running) should return `nil` from `Resume()` unconditionally.
-4. If it sends output directly (no log file), have `LogPath` return `""` and send `step.LineMsg` or `step.SetMsg` via `step.Send`.
-5. Register the template in `Config.Steps`.
+3. If the step needs custom cleanup on stop (e.g. kill a process group, run a teardown command), implement `tui.Stopper` (`= step.Stopper`). Steps that don't implement `Stopper` are skipped during stop — their processes are terminated by context cancellation.
+4. If the step needs resume customization, implement `tui.Resumer` (`= step.Resumer`). Long-running processes should save their PID via `config.SaveStepData` and check liveness in `Resume()`. One-shot steps (steps that complete and leave no process running) should return `nil` from `Resume()` unconditionally.
+5. If it sends output directly (no log file), have `LogPath` return `""` and send `tui.SetMsg` or `tui.LineMsg` via `tui.SendMsg` (or the injected sender if you implement `tui.Sender`).
+6. Register the template in `Config.Steps`.
 
 ## Adding a custom REPL command
 
@@ -148,7 +184,7 @@ Commands: []CommandSpec{{
 }},
 ```
 
-Built-in names (`help`, `start`, `stop`, `restart`, `logs`, `status`, `test`, `theme`) are reserved — `validateTemplates` will reject conflicts.
+Built-in names (`help`, `start`, `stop`, `restart`, `logs`, `status`, `test`, `theme`) are reserved — `buildDefsFromTemplates` will return an error for conflicts.
 
 ## Build and test
 
@@ -170,9 +206,30 @@ Three package-level globals in `tui/tui.go`:
 
 `step.Send` (in `step/step.go`) is set once at startup to `prog.Send`. Steps also accept injected senders via the `step.Sender` interface for isolated testing.
 
+## Skaffold pipeline (builtins)
+
+`SkaffoldPipeline` is the recommended entry point for multi-step skaffold workflows. It creates and wires the generator, build, and dev templates from a single generate function:
+
+```go
+pipeline := builtins.NewSkaffoldPipeline(func(v tui.WizardValues) (string, []string, error) {
+    return generateSkaffoldYAML(v.String("env"))
+})
+
+steps := []tui.StepTemplate{builtins.MinikubeTemplate(), builtins.KubectlTemplate(), ...}
+steps = append(steps, pipeline.Templates()...)  // generator + build + dev
+```
+
+- `GeneratorTemplate()` — hidden step that calls generate once and caches to `StepData`
+- `BuildTemplate()` — `skaffold build`, waits for minikube
+- `DevTemplate()` — `skaffold dev/run/debug`, waits for minikube + build (build dep silently no-ops if `BuildTemplate` is not registered)
+- `Templates()` — returns all three in registration order
+
+For custom wiring (e.g. no build step), use the lower-level functions directly: `SkaffoldFileGeneratorTemplate`, `SkaffoldTemplateFrom`, `SkaffoldBuildTemplateFrom`.
+
 ## Style rules
 
-- `appState` owns data; `viewState` owns display. Don't store computed/transient display state in `appState`.
+- `appState` owns domain data (including overlay kind and wizard pointer); `viewState` owns ephemeral display state (viewports, animations). The rule: if removing the field would change observable program behavior, it belongs in `appState`.
 - All log ingestion goes through `Update` message dispatch — no direct viewport mutation from goroutines.
+- `dispatchCommand` returns `tea.Cmd`. All command handler methods (`handleXxx`) return `tea.Cmd`. Handlers that only use goroutines + `prog.Send` return `nil`.
 - Animations are driven by `tickMsg` advancing `flipProgress` / `fullscreenProgress` by a fixed step per frame; the viewport resize happens when the animation settles.
 - Buffer cap is `maxBufLines = 5000`. `appendLine` enforces this.

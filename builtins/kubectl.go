@@ -31,9 +31,8 @@ func (s *KubectlStep) sender() func(any) {
 	return step.Send
 }
 
-func (s *KubectlStep) ID() string                             { return "kubectl" }
-func (s *KubectlStep) LogPath(_ string) string                { return "" }
-func (s *KubectlStep) Stop(_ context.Context, _ string) error { return nil }
+func (s *KubectlStep) ID() string      { return "kubectl" }
+func (s *KubectlStep) LogPath(_ string) string { return "" }
 
 // Resume checks if the saved kubectl process is still running.
 // Returns nil if running (continuing to use existing process), or error to trigger restart via Start().

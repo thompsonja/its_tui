@@ -30,12 +30,24 @@ type stepEntry struct {
 	cancel context.CancelFunc
 }
 
+// instanceRuntime holds per-instance execution state.
+type instanceRuntime struct {
+	name           string
+	activeDefs     []StepDef
+	stepCtxs       map[string]stepEntry
+	completedSteps int
+	totalSteps     int
+}
+
 // appState holds domain state: data that is independent of how it is displayed.
 type appState struct {
 	cfg          Config
-	instanceName string
+	inst         instanceRuntime
 	statePath    string
 	workspaceDir string
+
+	overlay overlayKind
+	wizard  *startWizard
 
 	panels      [3]panelView
 	commandsBuf []string
@@ -50,12 +62,7 @@ type appState struct {
 	testBuf     []string
 	testRunning bool
 
-	activeDefs []StepDef
-	stepCtxs   map[string]stepEntry
 	customCmds map[string]CommandSpec
-
-	totalSteps     int
-	completedSteps int
 }
 
 func (a *appState) configuredName() string {

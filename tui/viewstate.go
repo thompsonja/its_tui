@@ -38,8 +38,6 @@ type viewState struct {
 	// card-flip animation: 0.0 = commands panel, 1.0 = overlay.
 	flipProgress float64
 	flipTarget   float64
-	overlay      overlayKind
-	wizard       *startWizard
 
 	// fullscreen animation: 0.0 = 2×2 grid, 1.0 = focused panel fills screen.
 	fullscreenProgress float64
@@ -162,11 +160,11 @@ func (vs *viewState) resize(app appState) {
 	vs.helpOverlayVP.SetContent(vs.helpContent(vpW_L, app.customCmds))
 	vs.input.Width = vpW_L
 
-	if vs.wizard != nil {
+	if app.wizard != nil {
 		inputW := max(20, vpW_L-16)
-		for i := range vs.wizard.states {
-			if vs.wizard.states[i].spec.Kind != FieldKindSelect {
-				vs.wizard.states[i].pickerSearch.Width = inputW
+		for i := range app.wizard.states {
+			if app.wizard.states[i].spec.Kind != FieldKindSelect {
+				app.wizard.states[i].pickerSearch.Width = inputW
 			}
 		}
 	}
@@ -208,7 +206,7 @@ func (vs viewState) render(app appState) string {
 }
 
 func (vs viewState) fullscreenHint(app appState) string {
-	if app.instanceName == "" {
+	if app.inst.name == "" {
 		return ""
 	}
 	var text string
@@ -426,9 +424,9 @@ func (vs viewState) panelTitle(app appState, pid PanelID, focused bool) string {
 func (vs viewState) renderTopBar(app appState) string {
 	var text string
 	if app.cfg.StatusLine != nil {
-		text = app.cfg.StatusLine(app.instanceName)
-	} else if app.instanceName != "" {
-		text = app.instanceName
+		text = app.cfg.StatusLine(app.inst.name)
+	} else if app.inst.name != "" {
+		text = app.inst.name
 	} else {
 		text = "no instance running"
 	}
@@ -495,7 +493,7 @@ func (vs viewState) renderCommandsPanel(app appState, w, h int) string {
 		content = vs.commandsContent(w)
 
 	case p >= 1:
-		titleText, content = vs.renderOverlay(w, innerH)
+		titleText, content = vs.renderOverlay(app, w, innerH)
 		titleText += spinner + hint
 
 	case p < 0.5:
@@ -515,7 +513,7 @@ func (vs viewState) renderCommandsPanel(app appState, w, h int) string {
 	default:
 		multiplier := 2.0*p - 1.0
 		expandH := max(1, int(float64(innerH)*multiplier))
-		titleText, content = vs.renderOverlayExpanding(w, innerH, expandH)
+		titleText, content = vs.renderOverlayExpanding(app, w, innerH, expandH)
 		titleText += spinner + hint
 	}
 
@@ -545,25 +543,25 @@ func padToHeight(rendered string, current, target int) string {
 	return rendered + strings.Repeat("\n", target-current)
 }
 
-func (vs viewState) renderOverlay(w, innerH int) (string, string) {
-	switch vs.overlay {
+func (vs viewState) renderOverlay(app appState, w, innerH int) (string, string) {
+	switch app.overlay {
 	case overlayHelp:
 		return " Help", vs.helpOverlayVP.View()
 	case overlayWizard:
-		raw := vs.renderWizard()
+		raw := vs.renderWizard(app)
 		return vs.wizardTitle(), padToHeight(raw, strings.Count(raw, "\n")+1, innerH)
 	}
 	return " Commands", ""
 }
 
-func (vs viewState) renderOverlayExpanding(w, innerH, expandH int) (string, string) {
-	switch vs.overlay {
+func (vs viewState) renderOverlayExpanding(app appState, w, innerH, expandH int) (string, string) {
+	switch app.overlay {
 	case overlayHelp:
 		tmpVP := vs.helpOverlayVP
 		tmpVP.Height = expandH
 		return " Help", padToHeight(tmpVP.View(), expandH, innerH)
 	case overlayWizard:
-		raw := vs.renderWizard()
+		raw := vs.renderWizard(app)
 		rawLines := strings.Split(raw, "\n")
 		visible := min(expandH, len(rawLines))
 		return vs.wizardTitle(), padToHeight(strings.Join(rawLines[:visible], "\n"), visible, innerH)
@@ -668,15 +666,15 @@ func (vs viewState) wizardTitle() string {
 	return " Start"
 }
 
-func (vs viewState) renderWizard() string {
-	if vs.wizard == nil {
+func (vs viewState) renderWizard(app appState) string {
+	if app.wizard == nil {
 		return ""
 	}
-	return vs.renderWizardCustom()
+	return vs.renderWizardCustom(app)
 }
 
-func (vs viewState) renderWizardCustom() string {
-	wiz := vs.wizard
+func (vs viewState) renderWizardCustom(app appState) string {
+	wiz := app.wizard
 	ws := currentWizStyles()
 	numFields := len(wiz.states)
 

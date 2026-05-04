@@ -62,6 +62,9 @@ func newModel(cfg Config) model {
 			workspaceDir: workspaceDir,
 			historyIdx:   -1,
 			customCmds:   make(map[string]CommandSpec),
+			overlay:      overlayNone,
+			wizard:       nil,
+			inst:         instanceRuntime{},
 		},
 		vs: viewState{
 			focused:            panelCommands,

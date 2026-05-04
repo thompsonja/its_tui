@@ -27,7 +27,7 @@ func wizardValuesFromState(inst *InstanceState) WizardValues {
 func (m *model) switchToInstance(name string) {
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
-	m.app.instanceName = name
+	m.app.inst.name = name
 	m.app.debugPorts = nil
 	for i := range m.app.panels {
 		for j := range m.app.panels[i].bufs {
@@ -122,7 +122,7 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 			if _, exists := m.app.customCmds[cmd.Name]; exists {
 				return nil, fmt.Errorf("command name conflict: %q defined by multiple steps", cmd.Name)
 			}
-			builtins := []string{"help", "start", "stop", "restart", "logs", "test", "theme"}
+			builtins := []string{"help", "start", "stop", "restart", "logs", "status", "test", "theme"}
 			for _, b := range builtins {
 				if b == cmd.Name {
 					return nil, fmt.Errorf("step %q: command %q conflicts with built-in command", label, cmd.Name)

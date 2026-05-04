@@ -242,14 +242,19 @@ func newStartWizard(cfg Config, commandsVPWidth int, initial WizardValues) *star
 				}
 			}
 		case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
-			if spec.OptionsFunc == nil {
+			// Normalize: promote static Options to OptionsFunc so all downstream
+			// code can unconditionally call s.spec.OptionsFunc.
+			if s.spec.OptionsFunc == nil && len(s.spec.Options) > 0 {
+				s.spec.OptionsFunc = StaticOptions(s.spec.Options...)
+			}
+			if s.spec.OptionsFunc == nil {
 				panic(fmt.Sprintf("tui: FieldSpec %q has Kind %v but nil OptionsFunc", spec.ID, spec.Kind))
 			}
 			search := textinput.New()
 			search.Placeholder = "search…"
 			search.Width = inputW
 			s.pickerSearch = search
-			opts := spec.OptionsFunc(initial)
+			opts := s.spec.OptionsFunc(initial)
 			s.resolvedOptions = opts
 			s.strPickerItems = append([]string(nil), opts...)
 		case FieldKindText:

@@ -23,6 +23,25 @@ type (
 	StepState      = config.StepState
 
 	Step = step.Step
+
+	// Stopper is the optional interface steps implement to perform cleanup when the
+	// instance is stopped. Steps that don't implement Stopper are skipped during
+	// stop — their processes are terminated by context cancellation.
+	Stopper = step.Stopper
+
+	// Resumer is the optional interface steps implement to customize session-restore
+	// behavior. See step.Resumer for full documentation.
+	Resumer = step.Resumer
+
+	// Sender is the optional interface steps implement to accept an injected message
+	// sender for isolated testing. See step.Sender for full documentation.
+	Sender = step.Sender
+
+	// Message types for steps that produce output directly (no log file).
+	// Use with SendMsg or the injected sender from step.Sender.
+	LineMsg    = step.LineMsg
+	SetMsg     = step.SetMsg
+	CommandMsg = step.CommandMsg
 )
 
 // ── Function aliases ──────────────────────────────────────────────────────────
@@ -106,12 +125,23 @@ const (
 
 // FieldSpec describes one user-configurable wizard field.
 type FieldSpec struct {
-	ID          string // unique identifier; used as key in WizardValues
-	Label       string // display label
-	Kind        FieldKind
-	OptionsFunc func(WizardValues) []string // provides choices for Select / SingleSelect / MultiSelect
-	SystemsFunc func(WizardValues) []System // provides hierarchy for SystemSelect
-	Default     int                         // for Select: index of the default option
+	ID      string // unique identifier; used as key in WizardValues
+	Label   string // display label
+	Kind    FieldKind
+	Default int // for Select: index of the default option
+
+	// Options provides a fixed list of choices for Select / SingleSelect / MultiSelect fields.
+	// Use this for lists that never change based on other field selections.
+	// If both Options and OptionsFunc are set, OptionsFunc takes precedence.
+	Options []string
+
+	// OptionsFunc provides dynamic choices for Select / SingleSelect / MultiSelect fields.
+	// Called each time the wizard re-evaluates so one field's selection can drive another's options.
+	// Takes precedence over Options when both are set.
+	OptionsFunc func(WizardValues) []string
+
+	// SystemsFunc provides the hierarchy for FieldKindSystemSelect fields.
+	SystemsFunc func(WizardValues) []System
 
 	// MergeValuesFunc, if non-nil, is called during reEvalDynamicFields for
 	// MultiSelect/SystemSelect fields. Returns values that should be
@@ -316,8 +346,11 @@ func validateTemplates(steps []StepTemplate) error {
 			knownIDs[t.ID] = true
 		}
 	}
-	// Validate WaitFor references only when every template has an ID registered.
-	if len(steps) > 0 && len(knownIDs) == len(steps) {
+	// Validate WaitFor references against known template IDs.
+	// Runs whenever at least one template has a declared ID, catching typos even
+	// in configs where not every template carries an ID (e.g. skaffold dev with
+	// a dynamic mode-dependent step ID).
+	if len(knownIDs) > 0 {
 		for _, t := range steps {
 			for _, dep := range t.WaitFor {
 				if !knownIDs[dep] {
@@ -326,15 +359,15 @@ func validateTemplates(steps []StepTemplate) error {
 			}
 		}
 	}
-	// Validate that FieldSpec.Kind is consistent with the required func fields.
-	// FieldKindSelect/SingleSelect/MultiSelect require OptionsFunc.
-	// FieldKindSystemSelect requires SystemsFunc.
+	// Validate that FieldSpec.Kind is consistent with the required option sources.
+	// Select / SingleSelect / MultiSelect need Options or OptionsFunc.
+	// SystemSelect needs SystemsFunc.
 	for _, t := range steps {
 		for _, f := range t.Fields {
 			switch f.Kind {
 			case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
-				if f.OptionsFunc == nil {
-					return fmt.Errorf("template %q field %q: Kind %v requires OptionsFunc to be non-nil", t.Label, f.ID, f.Kind)
+				if f.OptionsFunc == nil && len(f.Options) == 0 {
+					return fmt.Errorf("template %q field %q: Kind %v requires Options or OptionsFunc to be set", t.Label, f.ID, f.Kind)
 				}
 			case FieldKindSystemSelect:
 				if f.SystemsFunc == nil {
@@ -364,6 +397,16 @@ func validateTests(tests []TestTemplate) error {
 func PrintCommand(line string) {
 	if prog != nil {
 		prog.Send(commandLineMsg(line))
+	}
+}
+
+// SendMsg forwards a message to the TUI program. Use from custom step
+// implementations that need to emit output (e.g. step.SetMsg, step.LineMsg)
+// without holding a reference to the program. Safe to call before Run — it
+// is a no-op if the sender has not been registered yet.
+func SendMsg(msg any) {
+	if step.Send != nil {
+		step.Send(msg)
 	}
 }
 
@@ -430,11 +473,11 @@ func Run(cfg Config) error {
 	var restoreName string
 	if state.Instance != nil && state.Instance.StartedAt != "" {
 		restoreName = m.app.configuredName()
-		m.app.instanceName = restoreName
+		m.app.inst.name = restoreName
 		m.vs.fullscreenProgress = 0
 		m.vs.fullscreenTarget = 0
 		restoreDefs = m.buildPipelineFromState(restoreName, state.Instance)
-		m.app.activeDefs = restoreDefs
+		m.app.inst.activeDefs = restoreDefs
 		m.app.registerPipeline(restoreDefs)
 
 		// Restore active tab indices for each panel
@@ -493,7 +536,7 @@ func Run(cfg Config) error {
 				continue
 			}
 			id := def.Step.ID()
-			if e, ok := m.app.stepCtxs[id]; ok {
+			if e, ok := m.app.inst.stepCtxs[id]; ok {
 				go step.WatchStep(e.ctx, def.Step, restoreName)
 			}
 		}

@@ -106,7 +106,6 @@ type fakeStep struct {
 func (f *fakeStep) ID() string                                   { return f.id }
 func (f *fakeStep) LogPath(name string) string                   { return f.logPath }
 func (f *fakeStep) Start(ctx context.Context, name string) error { return f.startErr }
-func (f *fakeStep) Stop(ctx context.Context, name string) error  { return nil }
 
 // fakeBuild returns a Build function that always returns a fakeStep with the
 // given ID, or the given error.
@@ -592,6 +591,33 @@ func TestValidateTemplates_WaitForSkippedWithoutIDs(t *testing.T) {
 	}
 }
 
+func TestValidateTemplates_WaitForValidatedWithPartialIDs(t *testing.T) {
+	// When SOME templates have IDs, WaitFor is validated even for templates without IDs.
+	// This catches typos in configs like skaffold pipelines where the dev template
+	// has no ID but its WaitFor deps reference stable templates that do.
+	err := validateTemplates([]StepTemplate{
+		{ID: "minikube", Label: "minikube", Build: fakeBuild("minikube", nil)},
+		{Label: "dev", WaitFor: []string{"minikube_typo"}, Build: fakeBuild("dev", nil)},
+	})
+	if err == nil {
+		t.Fatal("expected error: WaitFor dep is unknown, even though template has no ID")
+	}
+	if !strings.Contains(err.Error(), "minikube_typo") {
+		t.Fatalf("error should name the unknown dep, got: %v", err)
+	}
+}
+
+func TestValidateTemplates_NoIDTemplate_ValidWaitFor(t *testing.T) {
+	// A template without its own ID can still have valid WaitFor deps.
+	err := validateTemplates([]StepTemplate{
+		{ID: "minikube", Label: "minikube", Build: fakeBuild("minikube", nil)},
+		{Label: "dev", WaitFor: []string{"minikube"}, Build: fakeBuild("dev", nil)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestValidateTemplates_AllValidTemplates(t *testing.T) {
 	err := validateTemplates([]StepTemplate{
 		MinikubeTemplate(),
@@ -601,6 +627,77 @@ func TestValidateTemplates_AllValidTemplates(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("provided templates should be valid: %v", err)
+	}
+}
+
+// ── FieldSpec.Options shorthand ───────────────────────────────────────────────
+
+func TestValidateTemplates_FieldSpec_Options_PassesWithoutOptionsFunc(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{
+			{ID: "env", Label: "Environment", Kind: FieldKindSelect, Options: []string{"dev", "test"}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Options without OptionsFunc should be valid: %v", err)
+	}
+}
+
+func TestValidateTemplates_FieldSpec_Options_ErrorsWithNeither(t *testing.T) {
+	err := validateTemplates([]StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{
+			{ID: "env", Label: "Environment", Kind: FieldKindSelect},
+		},
+	}})
+	if err == nil {
+		t.Fatal("expected error when neither Options nor OptionsFunc is set")
+	}
+}
+
+func TestNewStartWizard_FieldSpec_Options_ResolvesCorrectly(t *testing.T) {
+	cfg := Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{
+			{ID: "env", Label: "Environment", Kind: FieldKindSelect, Options: []string{"dev", "test"}, Default: 1},
+		},
+	}}}
+	wiz := newStartWizard(cfg, 0, WizardValues{})
+	if len(wiz.states) != 1 {
+		t.Fatalf("expected 1 field state, got %d", len(wiz.states))
+	}
+	s := wiz.states[0]
+	if len(s.resolvedOptions) != 2 {
+		t.Fatalf("expected 2 resolved options, got %d: %v", len(s.resolvedOptions), s.resolvedOptions)
+	}
+	if s.resolvedOptions[0] != "dev" || s.resolvedOptions[1] != "test" {
+		t.Fatalf("unexpected options: %v", s.resolvedOptions)
+	}
+	if s.selectIdx != 1 {
+		t.Fatalf("expected Default=1 to set selectIdx=1, got %d", s.selectIdx)
+	}
+}
+
+func TestNewStartWizard_FieldSpec_OptionsFuncOverridesOptions(t *testing.T) {
+	// When both Options and OptionsFunc are set, OptionsFunc takes precedence.
+	cfg := Config{Steps: []StepTemplate{{
+		Label: "x",
+		Build: fakeBuild("x", nil),
+		Fields: []FieldSpec{{
+			ID:          "env",
+			Kind:        FieldKindSelect,
+			Options:     []string{"ignored"},
+			OptionsFunc: StaticOptions("a", "b", "c"),
+		}},
+	}}}
+	wiz := newStartWizard(cfg, 0, WizardValues{})
+	s := wiz.states[0]
+	if len(s.resolvedOptions) != 3 || s.resolvedOptions[0] != "a" {
+		t.Fatalf("OptionsFunc should override Options, got: %v", s.resolvedOptions)
 	}
 }
 

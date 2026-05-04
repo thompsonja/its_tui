@@ -40,9 +40,12 @@ type Step interface {
 	// Start launches the step and blocks until it is running/ready or fails.
 	// ctx is cancelled when the instance is stopped or switched.
 	Start(ctx context.Context, instanceName string) error
+}
 
-	// Stop performs cleanup when the instance is stopped.
-	// Return nil if no cleanup is needed.
+// Stopper is an optional interface for steps that need custom cleanup when
+// the instance is stopped. Steps that don't implement Stopper are skipped
+// during stop — their processes are terminated by context cancellation.
+type Stopper interface {
 	Stop(ctx context.Context, instanceName string) error
 }
 

@@ -224,9 +224,6 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, instanceName string, 
 	}
 }
 
-// Stop is a no-op: skaffold is terminated when the instance context is cancelled.
-func (s *SkaffoldStep) Stop(_ context.Context, _ string) error { return nil }
-
 // Resume implements step.Resumer. For run and build modes the work persists in
 // the cluster/registry so we skip. For dev and debug, we read the PID from
 // step_data and check liveness. Alive → reattach (WatchStep tails existing
@@ -375,121 +372,6 @@ func skaffoldDeployComplete(line string) bool {
 	return te.Task == "Deploy" && (te.Status == "Succeeded" || te.Status == "Complete")
 }
 
-// SkaffoldTemplate returns a StepTemplate for skaffold.
-//
-// generate is called with the full wizard values and should return the path to
-// a skaffold.yaml and an optional list of skaffold profiles to activate.
-// Returning an empty path skips the step; returning an error aborts the wizard.
-// The wizard values include the "mode" field contributed by this template, as
-// well as any fields from other templates in the pipeline (e.g. an "env" field
-// from a companion step, or "components" from a custom selection step).
-//
-// If you need component selection, add a separate Hidden step with a
-// FieldKindSystemSelect field (see the "env" step pattern in sample/main.go).
-func SkaffoldTemplate(generate func(v tui.WizardValues) (path string, profiles []string, err error)) tui.StepTemplate {
-	return tui.StepTemplate{
-		// ID omitted: Step.ID() returns "skaffold_<mode>" which varies based on wizard selection
-		Panel: tui.PanelTopRight,
-		LabelFunc: func(v tui.WizardValues) string {
-			mode := v.String("mode")
-			if mode == "" {
-				mode = "dev"
-			}
-			return "Skaffold (" + mode + ")"
-		},
-		WaitFor: []string{"minikube"},
-		Fields: []tui.FieldSpec{
-			{ID: "mode", Label: "Mode", Kind: tui.FieldKindSelect, OptionsFunc: tui.StaticOptions("dev", "run", "debug"), Default: 0},
-		},
-		Commands: []tui.CommandSpec{
-			{
-				Name: "status",
-				Help: "show skaffold deployment status",
-				Handler: func(args []string, instanceName string, values tui.WizardValues) error {
-					if instanceName == "" {
-						tui.PrintCommand("  no instance running - use: start")
-						return nil
-					}
-					mode := values.String("mode")
-					if mode == "" {
-						mode = "dev"
-					}
-					tui.PrintCommand(fmt.Sprintf("  skaffold running in %s mode", mode))
-					tui.PrintCommand(fmt.Sprintf("  instance: %s", instanceName))
-					return nil
-				},
-			},
-		},
-		Build: func(v tui.WizardValues) (step.Step, error) {
-			if generate == nil {
-				return nil, nil
-			}
-			mode := v.String("mode")
-			if mode == "" {
-				mode = "dev"
-			}
-			path, profiles, err := generate(v)
-			if err != nil {
-				return nil, err
-			}
-			if path == "" {
-				return nil, nil
-			}
-			return &SkaffoldStep{Path: path, Mode: mode, Profiles: profiles, StatePath: config.DefaultStatePath()}, nil
-		},
-	}
-}
-
-// SkaffoldBuildTemplate returns a StepTemplate for skaffold build.
-//
-// generate is called with the full wizard values and should return the path to
-// a skaffold.yaml and an optional list of skaffold profiles to activate.
-// Returning an empty path skips the step; returning an error aborts the wizard.
-// The wizard values include the "mode" field contributed by this template, as
-// well as any fields from other templates in the pipeline (e.g. an "env" field
-// from a companion step, or "components" from a custom selection step).
-//
-// If you need component selection, add a separate Hidden step with a
-// FieldKindSystemSelect field (see the "env" step pattern in sample/main.go).
-func SkaffoldBuildTemplate(generate func(v tui.WizardValues) (path string, profiles []string, err error)) tui.StepTemplate {
-	return tui.StepTemplate{
-		ID:    "skaffold_build",
-		Panel: tui.PanelTopRight,
-		LabelFunc: func(v tui.WizardValues) string {
-			return "Skaffold (build)"
-		},
-		WaitFor: []string{"minikube"},
-		Commands: []tui.CommandSpec{
-			{
-				Name: "build_status",
-				Help: "show skaffold build status",
-				Handler: func(args []string, instanceName string, values tui.WizardValues) error {
-					if instanceName == "" {
-						tui.PrintCommand("  no instance running - use: start")
-						return nil
-					}
-					tui.PrintCommand("  skaffold running in build mode")
-					tui.PrintCommand(fmt.Sprintf("  instance: %s", instanceName))
-					return nil
-				},
-			},
-		},
-		Build: func(v tui.WizardValues) (step.Step, error) {
-			if generate == nil {
-				return nil, nil
-			}
-			path, profiles, err := generate(v)
-			if err != nil {
-				return nil, err
-			}
-			if path == "" {
-				return nil, nil
-			}
-			return &SkaffoldStep{Path: path, Mode: "build", Profiles: profiles, StatePath: config.DefaultStatePath()}, nil
-		},
-	}
-}
-
 // SkaffoldConfig holds the generated skaffold file path and profiles.
 // It is used to share configuration between SkaffoldFileGeneratorTemplate
 // and multiple skaffold step templates (build, dev, run, debug).
@@ -521,7 +403,7 @@ type SkaffoldConfig struct {
 func SkaffoldFileGeneratorTemplate(cfg *SkaffoldConfig, generate func(v tui.WizardValues) (path string, profiles []string, err error)) tui.StepTemplate {
 	return tui.StepTemplate{
 		ID:     "skaffold_generator",
-		Panel:  tui.PanelTopLeft,
+		Panel:  tui.PanelNone,
 		Label:  "Skaffold Config",
 		Hidden: true,
 		Build: func(v tui.WizardValues) (step.Step, error) {
@@ -594,7 +476,7 @@ func SkaffoldTemplateFrom(cfg *SkaffoldConfig) tui.StepTemplate {
 		},
 		Commands: []tui.CommandSpec{
 			{
-				Name: "status",
+				Name: "deploy_status",
 				Help: "show skaffold deployment status",
 				Handler: func(args []string, instanceName string, values tui.WizardValues) error {
 					if instanceName == "" {
@@ -657,5 +539,74 @@ func SkaffoldBuildTemplateFrom(cfg *SkaffoldConfig) tui.StepTemplate {
 			}
 			return &SkaffoldStep{Path: cfg.Path, Mode: "build", Profiles: cfg.Profiles, StatePath: config.DefaultStatePath()}, nil
 		},
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SkaffoldPipeline — recommended entry point for multi-step skaffold pipelines.
+// ──────────────────────────────────────────────────────────────────────────────
+
+// SkaffoldPipeline coordinates a skaffold generator, build, and dev/run/debug step
+// that share a single generated configuration file. Create one with
+// NewSkaffoldPipeline, then include the templates it returns in Config.Steps.
+//
+// Typical usage:
+//
+//	pipeline := builtins.NewSkaffoldPipeline(func(v tui.WizardValues) (string, []string, error) {
+//	    return generateSkaffoldYAML(v.String("env"))
+//	})
+//	cfg := tui.Config{
+//	    Steps: []tui.StepTemplate{
+//	        builtins.MinikubeTemplate(),
+//	        builtins.KubectlTemplate(),
+//	        pipeline.GeneratorTemplate(),
+//	        pipeline.BuildTemplate(),
+//	        pipeline.DevTemplate(),
+//	        builtins.MFETemplate(...),
+//	    },
+//	}
+type SkaffoldPipeline struct {
+	cfg      *SkaffoldConfig
+	generate func(v tui.WizardValues) (path string, profiles []string, err error)
+}
+
+// NewSkaffoldPipeline creates a pipeline for the given generate function.
+// The function is called once per wizard submission; its result is shared
+// by all templates from this pipeline.
+func NewSkaffoldPipeline(generate func(v tui.WizardValues) (path string, profiles []string, err error)) *SkaffoldPipeline {
+	return &SkaffoldPipeline{cfg: &SkaffoldConfig{}, generate: generate}
+}
+
+// GeneratorTemplate returns the hidden step that runs the generate function and
+// caches the result for the build and dev templates. Register this before
+// BuildTemplate and DevTemplate in Config.Steps.
+func (p *SkaffoldPipeline) GeneratorTemplate() tui.StepTemplate {
+	return SkaffoldFileGeneratorTemplate(p.cfg, p.generate)
+}
+
+// BuildTemplate returns the step that runs `skaffold build`. It waits for minikube.
+func (p *SkaffoldPipeline) BuildTemplate() tui.StepTemplate {
+	return SkaffoldBuildTemplateFrom(p.cfg)
+}
+
+// DevTemplate returns the step that runs `skaffold dev`, `run`, or `debug`.
+// It waits for minikube and, if BuildTemplate is also included, waits for the
+// build step to complete first. Including DevTemplate without BuildTemplate is
+// safe — the build dependency is ignored at runtime when no build step is present.
+func (p *SkaffoldPipeline) DevTemplate() tui.StepTemplate {
+	t := SkaffoldTemplateFrom(p.cfg)
+	t.WaitFor = append(t.WaitFor, "skaffold_build")
+	return t
+}
+
+// Templates returns all three templates in registration order: generator, build,
+// then dev. Append them to Config.Steps for the full build-then-deploy pipeline.
+//
+//	steps = append(steps, pipeline.Templates()...)
+func (p *SkaffoldPipeline) Templates() []tui.StepTemplate {
+	return []tui.StepTemplate{
+		p.GeneratorTemplate(),
+		p.BuildTemplate(),
+		p.DevTemplate(),
 	}
 }

@@ -80,9 +80,9 @@ func (m *model) finishStep(id string, ok bool, label string) {
 	}
 	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
 
-	if ok && m.app.instanceName != "" {
-		m.app.completedSteps++
-		if m.app.completedSteps == m.app.totalSteps && m.app.totalSteps > 0 {
+	if ok && m.app.inst.name != "" {
+		m.app.inst.completedSteps++
+		if m.app.inst.completedSteps == m.app.inst.totalSteps && m.app.inst.totalSteps > 0 {
 			sp := m.app.statePath
 			go func() {
 				if err := MarkReady(sp); err != nil {

@@ -8,15 +8,16 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/thompsonja/its_tui/config"
 	"github.com/thompsonja/its_tui/step"
 )
 
-// dispatchCommand routes a typed line to its handler.
-func (m *model) dispatchCommand(line string) {
+// dispatchCommand routes a typed line to its handler and returns any resulting tea.Cmd.
+func (m *model) dispatchCommand(line string) tea.Cmd {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
-		return
+		return nil
 	}
 	sp := m.app.statePath
 	go func() {
@@ -24,56 +25,70 @@ func (m *model) dispatchCommand(line string) {
 			debugLog("AppendCommandHistory: %v", err)
 		}
 	}()
+	var cmds []tea.Cmd
 	switch parts[0] {
 	case "help":
-		m.handleHelp()
+		cmds = append(cmds, m.handleHelp())
 	case "start":
-		m.handleStart()
+		cmds = append(cmds, m.handleStart())
 	case "stop":
-		m.handleStop()
+		cmds = append(cmds, m.handleStop())
 	case "restart":
-		m.handleRestart(parts)
+		cmds = append(cmds, m.handleRestart(parts))
 	case "logs":
-		m.handleLogs()
+		cmds = append(cmds, m.handleLogs())
 	case "status":
-		m.handleStatus()
+		cmds = append(cmds, m.handleStatus())
 	case "test":
-		m.handleTest(parts)
+		cmds = append(cmds, m.handleTest(parts))
 	case "theme":
-		m.handleTheme(parts)
+		cmds = append(cmds, m.handleTheme(parts))
 	default:
-		m.handleCustom(parts)
+		cmds = append(cmds, m.handleCustom(parts))
 	}
+	// Filter nils before batching.
+	var nonNil []tea.Cmd
+	for _, c := range cmds {
+		if c != nil {
+			nonNil = append(nonNil, c)
+		}
+	}
+	if len(nonNil) == 0 {
+		return nil
+	}
+	return tea.Batch(nonNil...)
 }
 
-func (m *model) handleHelp() {
-	m.vs.overlay = overlayHelp
+func (m *model) handleHelp() tea.Cmd {
+	m.app.overlay = overlayHelp
 	m.vs.flipTarget = 1.0
+	return nil
 }
 
-func (m *model) handleStart() {
+func (m *model) handleStart() tea.Cmd {
 	var initial WizardValues
 	if state, err := LoadState(m.app.statePath); err == nil && state.Instance != nil {
 		initial = wizardValuesFromState(state.Instance)
 	}
-	m.vs.overlay = overlayWizard
-	m.vs.wizard = newStartWizard(m.app.cfg, m.vs.commandsVP.Width, initial)
+	m.app.overlay = overlayWizard
+	m.app.wizard = newStartWizard(m.app.cfg, m.vs.commandsVP.Width, initial)
 	m.vs.flipTarget = 1.0
+	return nil
 }
 
-func (m *model) handleStop() {
-	name := m.app.instanceName
+func (m *model) handleStop() tea.Cmd {
+	name := m.app.inst.name
 	workspaceDir := m.app.workspaceDir
 	sp := m.app.statePath
 	m.printLine("$ stop")
 	if name == "" {
 		m.printLine("  no active instance — run: start")
-		return
+		return nil
 	}
 	m.vs.steps = map[string]*commandStep{}
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
-	m.app.instanceName = ""
+	m.app.inst.name = ""
 	for i := range m.app.panels {
 		for j := range m.app.panels[i].bufs {
 			m.app.panels[i].bufs[j] = nil
@@ -96,8 +111,8 @@ func (m *model) handleStop() {
 		step  Step
 	}
 	var stopTasks []stopTask
-	for i := len(m.app.activeDefs) - 1; i >= 0; i-- {
-		def := m.app.activeDefs[i]
+	for i := len(m.app.inst.activeDefs) - 1; i >= 0; i-- {
+		def := m.app.inst.activeDefs[i]
 		label := "stopping " + def.meta.label
 		if def.meta.label == "" {
 			label = "stopping step"
@@ -125,8 +140,12 @@ func (m *model) handleStop() {
 			prog.Send(stepDoneMsg{id: "mfe-stop", ok: true, label: "MFE stopped"})
 		}
 		for _, t := range stopTasks {
-			if err := t.step.Stop(context.Background(), name); err != nil {
-				prog.Send(stepDoneMsg{id: t.id, ok: false, label: t.label + " failed: " + err.Error()})
+			if stopper, ok := t.step.(step.Stopper); ok {
+				if err := stopper.Stop(context.Background(), name); err != nil {
+					prog.Send(stepDoneMsg{id: t.id, ok: false, label: t.label + " failed: " + err.Error()})
+				} else {
+					prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
+				}
 			} else {
 				prog.Send(stepDoneMsg{id: t.id, ok: true, label: t.label + " done"})
 			}
@@ -141,27 +160,28 @@ func (m *model) handleStop() {
 		prog.Send(instanceStoppedMsg{})
 		prog.Send(clearActiveDefsMsg{})
 	}()
+	return nil
 }
 
-func (m *model) handleRestart(parts []string) {
+func (m *model) handleRestart(parts []string) tea.Cmd {
 	m.printLine("$ " + strings.Join(parts, " "))
-	if m.app.instanceName == "" {
+	if m.app.inst.name == "" {
 		m.printLine("  no active instance — run: start")
-		return
+		return nil
 	}
 	if len(parts) < 2 {
 		m.printLine("  usage: restart <step-id>")
-		return
+		return nil
 	}
 	id := parts[1]
 	def, ok := m.app.findDef(id)
 	if !ok {
 		m.printLine("  unknown step: " + id)
-		return
+		return nil
 	}
-	name := m.app.instanceName
+	name := m.app.inst.name
 	sp := m.app.statePath
-	if e, exists := m.app.stepCtxs[id]; exists {
+	if e, exists := m.app.inst.stepCtxs[id]; exists {
 		e.cancel()
 	}
 	if pid, idx, ok := m.app.panelAndIdx(id); ok {
@@ -171,10 +191,10 @@ func (m *model) handleRestart(parts []string) {
 		}
 	}
 	stepCtx, stepCancel := context.WithCancel(instanceCtx)
-	if m.app.stepCtxs == nil {
-		m.app.stepCtxs = make(map[string]stepEntry)
+	if m.app.inst.stepCtxs == nil {
+		m.app.inst.stepCtxs = make(map[string]stepEntry)
 	}
-	m.app.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
+	m.app.inst.stepCtxs[id] = stepEntry{ctx: stepCtx, cancel: stepCancel}
 	if err := UpdateStepState(sp, id, config.StepStatusPending, nil); err != nil {
 		debugLog("restart: UpdateStepState %q pending: %v", id, err)
 	}
@@ -201,15 +221,16 @@ func (m *model) handleRestart(parts []string) {
 		}
 		prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 	}()
+	return nil
 }
 
-func (m *model) handleLogs() {
+func (m *model) handleLogs() tea.Cmd {
 	m.printLine("$ logs")
-	if m.app.instanceName == "" {
+	if m.app.inst.name == "" {
 		m.printLine("  no active instance — run: start")
-		return
+		return nil
 	}
-	name := m.app.instanceName
+	name := m.app.inst.name
 	for _, pv := range m.app.panels {
 		for _, def := range pv.defs {
 			lp := def.Step.LogPath(name)
@@ -218,19 +239,20 @@ func (m *model) handleLogs() {
 			}
 		}
 	}
+	return nil
 }
 
-func (m *model) handleStatus() {
+func (m *model) handleStatus() tea.Cmd {
 	m.printLine("$ status")
 	sp := m.app.statePath
-	if m.app.instanceName == "" {
+	if m.app.inst.name == "" {
 		m.printLine("  no active instance — run: start")
-		return
+		return nil
 	}
 	state, err := LoadState(sp)
 	if err != nil || state.Instance == nil || len(state.Instance.StepStates) == 0 {
 		m.printLine("  no step status available")
-		return
+		return nil
 	}
 	if state.Instance.StartedAt != "" && state.Instance.ReadyAt != "" {
 		started, err1 := time.Parse(time.RFC3339, state.Instance.StartedAt)
@@ -242,7 +264,7 @@ func (m *model) handleStatus() {
 		}
 	}
 	m.printLine("  Step Status:")
-	for _, def := range m.app.activeDefs {
+	for _, def := range m.app.inst.activeDefs {
 		id := def.Step.ID()
 		if ss, ok := state.Instance.StepStates[id]; ok {
 			statusIcon := "○"
@@ -266,22 +288,23 @@ func (m *model) handleStatus() {
 			m.printLine(statusLine)
 		}
 	}
+	return nil
 }
 
-func (m *model) handleTest(parts []string) {
+func (m *model) handleTest(parts []string) tea.Cmd {
 	m.printLine("$ test")
 	sp := m.app.statePath
-	if m.app.instanceName == "" {
+	if m.app.inst.name == "" {
 		m.printLine("  no active instance — run: start")
-		return
+		return nil
 	}
 	if len(m.app.cfg.Tests) == 0 {
 		m.printLine("  no tests configured")
-		return
+		return nil
 	}
 	if m.app.testRunning {
 		m.printLine("  test already running")
-		return
+		return nil
 	}
 	var tmpl *TestTemplate
 	if len(parts) > 1 {
@@ -298,7 +321,7 @@ func (m *model) handleTest(parts []string) {
 			for _, t := range m.app.cfg.Tests {
 				m.printLine("    " + t.Label)
 			}
-			return
+			return nil
 		}
 	} else if len(m.app.cfg.Tests) == 1 {
 		tmpl = &m.app.cfg.Tests[0]
@@ -307,7 +330,7 @@ func (m *model) handleTest(parts []string) {
 		for _, t := range m.app.cfg.Tests {
 			m.printLine("    " + t.Label)
 		}
-		return
+		return nil
 	}
 	var values WizardValues
 	if state, err := LoadState(sp); err == nil && state.Instance != nil {
@@ -316,11 +339,11 @@ func (m *model) handleTest(parts []string) {
 	tc, err := tmpl.Build(values)
 	if err != nil {
 		m.printLine("  error building test command: " + err.Error())
-		return
+		return nil
 	}
 	if tc.Cmd == "" {
 		m.printLine("  test template returned empty command")
-		return
+		return nil
 	}
 	m.app.testBuf = nil
 	m.vs.testVP.SetContent("")
@@ -353,14 +376,15 @@ func (m *model) handleTest(parts []string) {
 		}
 		prog.Send(testDoneMsg{ok: ok})
 	}()
+	return nil
 }
 
-func (m *model) handleTheme(parts []string) {
+func (m *model) handleTheme(parts []string) tea.Cmd {
 	m.printLine("$ " + strings.Join(parts, " "))
 	sp := m.app.statePath
 	if len(parts) < 2 {
 		m.printLine("themes: " + themeNames())
-		return
+		return nil
 	}
 	name := parts[1]
 	for _, t := range presets {
@@ -373,13 +397,14 @@ func (m *model) handleTheme(parts []string) {
 					debugLog("SaveTheme %q: %v", name, err)
 				}
 			}()
-			return
+			return nil
 		}
 	}
 	m.printLine("unknown theme: " + name + " (try: " + themeNames() + ")")
+	return nil
 }
 
-func (m *model) handleCustom(parts []string) {
+func (m *model) handleCustom(parts []string) tea.Cmd {
 	cmdName := parts[0]
 	args := parts[1:]
 	sp := m.app.statePath
@@ -387,14 +412,14 @@ func (m *model) handleCustom(parts []string) {
 	if !ok {
 		m.printLine("$ " + strings.Join(parts, " "))
 		m.printLine("unknown command: " + cmdName + " (try: help)")
-		return
+		return nil
 	}
 	m.printLine("$ " + strings.Join(parts, " "))
 	var values WizardValues
 	if state, err := LoadState(sp); err == nil && state.Instance != nil {
 		values = wizardValuesFromState(state.Instance)
 	}
-	instanceName := m.app.instanceName
+	instanceName := m.app.inst.name
 	go func() {
 		prog.Send(cmdActiveMsg(+1))
 		err := cmd.Handler(args, instanceName, values)
@@ -403,4 +428,5 @@ func (m *model) handleCustom(parts []string) {
 			prog.Send(commandLineMsg(fmt.Sprintf("  error: %v", err)))
 		}
 	}()
+	return nil
 }

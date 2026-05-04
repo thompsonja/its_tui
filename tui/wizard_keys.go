@@ -3,7 +3,7 @@ package tui
 import tea "github.com/charmbracelet/bubbletea"
 
 func (m *model) handleWizardKey(msg tea.KeyMsg) {
-	wiz := m.vs.wizard
+	wiz := m.app.wizard
 	if wiz == nil {
 		return
 	}
@@ -65,6 +65,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 				m.executeStartFromWizard()
 			}
 			m.vs.flipTarget = 0.0
+
 		}
 		return
 	}
