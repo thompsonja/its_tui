@@ -1087,6 +1087,213 @@ func TestReEvalDynamicFields_MergeValuesFunc_PreservesManualSelections(t *testin
 	}
 }
 
+// ── MergeValuesFunc on FieldKindSelect (applyAutoSelect) ─────────────────
+
+func TestReEvalDynamicFields_MergeValuesFunc_AutoSelectsSelectField(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+			},
+			{
+				spec: FieldSpec{
+					ID:      "mode",
+					Kind:    FieldKindSelect,
+					Options: []string{"off", "all except SUT", "all"},
+					OptionsFunc: StaticOptions("off", "all except SUT", "all"),
+					Default: 0,
+					MergeValuesFunc: func(v WizardValues) []string {
+						if v.String("suite") == "suite-a" {
+							return []string{"all except SUT"}
+						}
+						return nil
+					},
+				},
+				resolvedOptions: []string{"off", "all except SUT", "all"},
+				selectIdx:       0, // default "off"
+			},
+		},
+	}
+
+	// Select suite-a → mode should auto-select "all except SUT".
+	wiz.states[0].singleValue = "suite-a"
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].selectIdx != 1 {
+		t.Fatalf("expected selectIdx=1 (all except SUT), got %d", wiz.states[1].selectIdx)
+	}
+
+	// Deselect suite → mode should revert to default "off".
+	wiz.states[0].singleValue = ""
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].selectIdx != 0 {
+		t.Fatalf("expected selectIdx=0 (off) after clearing suite, got %d", wiz.states[1].selectIdx)
+	}
+}
+
+func TestReEvalDynamicFields_MergeValuesFunc_AutoSelectsSingleSelectField(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+			},
+			{
+				spec: FieldSpec{
+					ID:   "sut",
+					Kind: FieldKindSingleSelect,
+					OptionsFunc: func(v WizardValues) []string {
+						if v.String("suite") != "" {
+							return []string{"system-x", "system-y"}
+						}
+						return nil
+					},
+					MergeValuesFunc: func(v WizardValues) []string {
+						if v.String("suite") == "suite-a" {
+							return []string{"system-x"}
+						}
+						return nil
+					},
+				},
+				resolvedOptions: nil,
+			},
+		},
+	}
+
+	// Select suite-a → sut should auto-select "system-x".
+	wiz.states[0].singleValue = "suite-a"
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].singleValue != "system-x" {
+		t.Fatalf("expected singleValue=system-x, got %q", wiz.states[1].singleValue)
+	}
+
+	// Deselect suite → sut should clear.
+	wiz.states[0].singleValue = ""
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].singleValue != "" {
+		t.Fatalf("expected singleValue cleared, got %q", wiz.states[1].singleValue)
+	}
+}
+
+func TestReEvalDynamicFields_HiddenField_SkippedInNavigation(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "mode", Kind: FieldKindSelect, OptionsFunc: StaticOptions("off", "on")},
+				resolvedOptions: []string{"off", "on"},
+				selectIdx:       0,
+			},
+			{
+				spec: FieldSpec{
+					ID:   "detail",
+					Kind: FieldKindSingleSelect,
+					OptionsFunc: func(v WizardValues) []string {
+						if v.String("mode") == "on" {
+							return []string{"a", "b"}
+						}
+						return nil
+					},
+				},
+				resolvedOptions: nil,
+			},
+			{
+				spec:            FieldSpec{ID: "other", Kind: FieldKindSelect, OptionsFunc: StaticOptions("x", "y")},
+				resolvedOptions: []string{"x", "y"},
+				selectIdx:       0,
+			},
+		},
+	}
+
+	// Field 1 (detail) is hidden because mode is "off".
+	if !wiz.states[1].isHidden() {
+		t.Fatal("expected detail field to be hidden when options are empty")
+	}
+
+	// Navigation from field 0 should skip field 1 and go to field 2.
+	wiz.fieldIdx = 0
+	next := wiz.nextVisibleField(0, 1)
+	if next != 2 {
+		t.Fatalf("expected next visible field from 0 to be 2, got %d", next)
+	}
+
+	// Navigation backward from field 2 should skip field 1.
+	prev := wiz.nextVisibleField(2, -1)
+	if prev != 0 {
+		t.Fatalf("expected prev visible field from 2 to be 0, got %d", prev)
+	}
+
+	// Enable mode → detail becomes visible.
+	wiz.states[0].selectIdx = 1 // "on"
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].isHidden() {
+		t.Fatal("expected detail field to be visible when mode is on")
+	}
+
+	next = wiz.nextVisibleField(0, 1)
+	if next != 1 {
+		t.Fatalf("expected next visible field from 0 to be 1 when visible, got %d", next)
+	}
+}
+
+func TestReEvalDynamicFields_MergeValuesFunc_SelectPreservesManualOverride(t *testing.T) {
+	wiz := &startWizard{
+		states: []fieldState{
+			{
+				spec:            FieldSpec{ID: "suite", Kind: FieldKindSingleSelect, OptionsFunc: StaticOptions("suite-a", "suite-b")},
+				resolvedOptions: []string{"suite-a", "suite-b"},
+				strPickerItems:  []string{"suite-a", "suite-b"},
+			},
+			{
+				spec: FieldSpec{
+					ID:      "mode",
+					Kind:    FieldKindSelect,
+					OptionsFunc: StaticOptions("off", "all except SUT", "all"),
+					Default: 0,
+					MergeValuesFunc: func(v WizardValues) []string {
+						if v.String("suite") == "suite-a" {
+							return []string{"all except SUT"}
+						}
+						return nil
+					},
+				},
+				resolvedOptions: []string{"off", "all except SUT", "all"},
+				selectIdx:       0,
+			},
+		},
+	}
+
+	// Auto-select triggers.
+	wiz.states[0].singleValue = "suite-a"
+	wiz.reEvalDynamicFields()
+	if wiz.states[1].selectIdx != 1 {
+		t.Fatalf("expected auto-select to index 1, got %d", wiz.states[1].selectIdx)
+	}
+
+	// User manually overrides to "all" (index 2).
+	wiz.states[1].selectIdx = 2
+	wiz.reEvalDynamicFields()
+
+	// Should preserve manual override.
+	if wiz.states[1].selectIdx != 2 {
+		t.Fatalf("expected manual override preserved at index 2, got %d", wiz.states[1].selectIdx)
+	}
+
+	// Deselect suite — user's manual "all" should be preserved since they overrode.
+	wiz.states[0].singleValue = ""
+	wiz.reEvalDynamicFields()
+
+	if wiz.states[1].selectIdx != 2 {
+		t.Fatalf("expected manual override still preserved at index 2, got %d", wiz.states[1].selectIdx)
+	}
+}
+
 // ── topoSortSteps ────────────────────────────────────────────────────────
 
 func TestTopoSortSteps_Empty(t *testing.T) {

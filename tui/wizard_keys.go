@@ -18,7 +18,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 			}
 			wiz.syncFocus()
 		} else {
-			wiz.fieldIdx = (wiz.fieldIdx + 1) % (numFields + 1)
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, 1)
 			if s := wiz.activeState(); s != nil && s.spec.Kind == FieldKindSystemSelect {
 				s.collapsedIdx = 0
 			}
@@ -32,7 +32,7 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 			}
 			wiz.syncFocus()
 		} else {
-			wiz.fieldIdx = (wiz.fieldIdx - 1 + numFields + 1) % (numFields + 1)
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, -1)
 			if s := wiz.activeState(); s != nil && s.spec.Kind == FieldKindSystemSelect {
 				s.collapsedIdx = len(s.multiValues)
 			}
@@ -53,12 +53,10 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 				wiz.confirmIdx++
 			}
 		case "up":
-			if numFields > 0 {
-				wiz.fieldIdx = numFields - 1
-				wiz.syncFocus()
-			}
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, -1)
+			wiz.syncFocus()
 		case "down":
-			wiz.fieldIdx = 0
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, 1)
 			wiz.syncFocus()
 		case "enter":
 			if wiz.confirmIdx == 0 {
@@ -72,11 +70,11 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 
 	s := &wiz.states[wiz.fieldIdx]
 	next := func() {
-		wiz.fieldIdx = (wiz.fieldIdx + 1) % (numFields + 1)
+		wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, 1)
 		wiz.syncFocus()
 	}
 	prev := func() {
-		wiz.fieldIdx = (wiz.fieldIdx - 1 + numFields + 1) % (numFields + 1)
+		wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, -1)
 		wiz.syncFocus()
 	}
 

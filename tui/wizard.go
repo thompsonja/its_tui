@@ -46,6 +46,11 @@ type fieldState struct {
 	// on the last reEvalDynamicFields call. Used to diff when the driving
 	// field changes so old auto-values can be removed.
 	lastAutoValues map[string]bool
+
+	// lastAutoSelectVal tracks the value auto-selected by MergeValuesFunc
+	// for FieldKindSelect fields. Used to detect whether the user has
+	// manually overridden the auto-selection.
+	lastAutoSelectVal string
 }
 
 // startWizard drives the instance-start configuration screen.
@@ -351,6 +356,7 @@ func (w *startWizard) reEvalDynamicFields() {
 				if len(newOpts) == 0 {
 					s.selectIdx = 0
 				}
+				s.applyAutoSelect(vals)
 			}
 			if s.spec.Kind == FieldKindSingleSelect {
 				// Clear selection if it no longer exists.
@@ -364,6 +370,7 @@ func (w *startWizard) reEvalDynamicFields() {
 				if !found {
 					s.singleValue = ""
 				}
+				s.applyAutoSelectSingle(vals)
 			}
 			if s.spec.Kind == FieldKindMultiSelect {
 				valid := map[string]bool{}
@@ -382,6 +389,11 @@ func (w *startWizard) reEvalDynamicFields() {
 			s.strPickerItems = append([]string(nil), newOpts...)
 			s.updateStrFilter()
 		}
+	}
+
+	// If the focused field became hidden, advance to the next visible one.
+	if w.fieldIdx < len(w.states) && w.states[w.fieldIdx].isHidden() {
+		w.fieldIdx = w.nextVisibleField(w.fieldIdx, 1)
 	}
 }
 
@@ -419,6 +431,99 @@ func (s *fieldState) applyMergeValues(vals WizardValues, valid map[string]bool) 
 	}
 
 	s.lastAutoValues = newAutoSet
+}
+
+// applyAutoSelect calls spec.MergeValuesFunc for FieldKindSelect fields and
+// sets selectIdx to match the first returned value. If the user has manually
+// changed the selection away from the last auto-value, the override is preserved.
+func (s *fieldState) applyAutoSelect(vals WizardValues) {
+	if s.spec.MergeValuesFunc == nil {
+		return
+	}
+	raw := s.spec.MergeValuesFunc(vals)
+	newAutoVal := ""
+	if len(raw) > 0 {
+		newAutoVal = raw[0]
+	}
+
+	if newAutoVal == s.lastAutoSelectVal {
+		return
+	}
+
+	currentVal := ""
+	if s.selectIdx >= 0 && s.selectIdx < len(s.resolvedOptions) {
+		currentVal = s.resolvedOptions[s.selectIdx]
+	}
+
+	wasAutoSelected := s.lastAutoSelectVal != "" && currentVal == s.lastAutoSelectVal
+	isAtDefault := s.lastAutoSelectVal == "" && s.selectIdx == s.spec.Default
+
+	if wasAutoSelected || isAtDefault {
+		if newAutoVal == "" {
+			s.selectIdx = s.spec.Default
+		} else {
+			for i, opt := range s.resolvedOptions {
+				if opt == newAutoVal {
+					s.selectIdx = i
+					break
+				}
+			}
+		}
+	}
+
+	s.lastAutoSelectVal = newAutoVal
+}
+
+// isHidden returns true when a field should not be rendered or focusable.
+// Option-based fields with no available options are hidden.
+func (s *fieldState) isHidden() bool {
+	switch s.spec.Kind {
+	case FieldKindSelect, FieldKindSingleSelect, FieldKindMultiSelect:
+		return len(s.resolvedOptions) == 0
+	}
+	return false
+}
+
+// nextVisibleField returns the next visible field index starting from `from`,
+// stepping by `delta` (+1 or -1). The buttons row (index == len(states)) is
+// always considered visible. Returns the buttons row as a fallback.
+func (w *startWizard) nextVisibleField(from, delta int) int {
+	n := len(w.states) + 1
+	idx := ((from + delta) % n + n) % n
+	for range n {
+		if idx == len(w.states) || !w.states[idx].isHidden() {
+			return idx
+		}
+		idx = ((idx + delta) % n + n) % n
+	}
+	return len(w.states)
+}
+
+// applyAutoSelectSingle calls spec.MergeValuesFunc for FieldKindSingleSelect
+// fields and sets singleValue to match the first returned value. If the user has
+// manually overridden the auto-selection, the override is preserved.
+func (s *fieldState) applyAutoSelectSingle(vals WizardValues) {
+	if s.spec.MergeValuesFunc == nil {
+		return
+	}
+	raw := s.spec.MergeValuesFunc(vals)
+	newAutoVal := ""
+	if len(raw) > 0 {
+		newAutoVal = raw[0]
+	}
+
+	if newAutoVal == s.lastAutoSelectVal {
+		return
+	}
+
+	wasAutoSelected := s.lastAutoSelectVal != "" && s.singleValue == s.lastAutoSelectVal
+	isDefault := s.lastAutoSelectVal == "" && s.singleValue == ""
+
+	if wasAutoSelected || isDefault {
+		s.singleValue = newAutoVal
+	}
+
+	s.lastAutoSelectVal = newAutoVal
 }
 
 // syncFocus focuses the active picker search input and blurs all others.

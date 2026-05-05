@@ -680,6 +680,9 @@ func (vs viewState) renderWizardCustom(app appState) string {
 
 	labelW := 8
 	for _, s := range wiz.states {
+		if s.isHidden() {
+			continue
+		}
 		if n := len([]rune(s.spec.Label)); n > labelW {
 			labelW = n
 		}
@@ -691,8 +694,12 @@ func (vs viewState) renderWizardCustom(app appState) string {
 	prevTemplateIdx := -1
 	values := wiz.buildValues()
 
+	lastRenderedIdx := -1
 	for i := range wiz.states {
 		s := &wiz.states[i]
+		if s.isHidden() {
+			continue
+		}
 
 		currentTemplateIdx := wiz.templateIdxs[i]
 		if currentTemplateIdx != prevTemplateIdx {
@@ -705,8 +712,8 @@ func (vs viewState) renderWizardCustom(app appState) string {
 			}
 			prevTemplateIdx = currentTemplateIdx
 		} else {
-			if i > 0 {
-				prev := &wiz.states[i-1]
+			if lastRenderedIdx >= 0 {
+				prev := &wiz.states[lastRenderedIdx]
 				if !(s.spec.Kind == FieldKindSelect && prev.spec.Kind == FieldKindSelect) {
 					lines = append(lines, "")
 				}
@@ -725,6 +732,7 @@ func (vs viewState) renderWizardCustom(app appState) string {
 		case FieldKindMultiSelect:
 			lines = append(lines, renderMultiSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
 		}
+		lastRenderedIdx = i
 	}
 
 	lines = append(lines, "")
