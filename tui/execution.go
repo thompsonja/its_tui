@@ -163,6 +163,7 @@ func (m *model) executeStart(defs []StepDef) {
 	sp := m.app.statePath
 	debugLog("executeStart: instance name=%q", name)
 
+	m.app.inst.startedAt = time.Now()
 	m.app.inst.completedSteps = 0
 	m.app.inst.totalSteps = 0
 	for _, def := range defs {
@@ -180,6 +181,18 @@ func (m *model) executeStart(defs []StepDef) {
 	}
 
 	sortedDefs := topoSortSteps(defs)
+
+	// Compute aligned label width before registering steps so all bars line up.
+	maxLabelW := 0
+	for _, def := range sortedDefs {
+		if !def.meta.hidden {
+			if w := len([]rune(def.effectiveLabel())); w > maxLabelW {
+				maxLabelW = w
+			}
+		}
+	}
+	m.vs.stepLabelWidth = maxLabelW
+
 	for _, def := range sortedDefs {
 		if def.meta.hidden {
 			continue
@@ -250,6 +263,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	name := m.app.inst.name
 	sp := m.app.statePath
 
+	m.app.inst.startedAt = time.Now()
 	m.app.inst.completedSteps = 0
 	m.app.inst.totalSteps = 0
 	for _, def := range defs {
@@ -272,6 +286,28 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	}
 
 	sortedDefs := topoSortSteps(defs)
+
+	// Compute aligned label width (including resume suffixes) before registering steps.
+	maxLabelW := 0
+	for _, def := range sortedDefs {
+		if def.meta.hidden {
+			continue
+		}
+		label := def.effectiveLabel()
+		switch resumeActions[def.Step.ID()] {
+		case ResumeActionSkip:
+			label += " (restored)"
+		case ResumeActionRetry:
+			label += " (retrying)"
+		case ResumeActionRestart:
+			label += " (restarting)"
+		}
+		if w := len([]rune(label)); w > maxLabelW {
+			maxLabelW = w
+		}
+	}
+	m.vs.stepLabelWidth = maxLabelW
+
 	for _, def := range sortedDefs {
 		if def.meta.hidden {
 			continue

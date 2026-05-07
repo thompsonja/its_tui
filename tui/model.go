@@ -105,6 +105,7 @@ func (m *model) cycleFocus(d int) {
 // resizePanels recalculates all viewport dimensions and syncs content.
 func (m *model) resizePanels() {
 	m.vs.resize(m.app)
+	m.reRenderStepBars()
 }
 
 // refreshFocusedPanel regenerates the focused panel viewport, applying search

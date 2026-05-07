@@ -30,17 +30,50 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds = append(cmds, tickCmd())
 		m.vs.spinnerTick++
-		// Update spinner frames for active (non-pending, non-done) steps.
+		// Update spinner and timeline bars for all non-pending steps while any
+		// step is still running. Running steps past the estimate show a shimmer.
 		if len(m.vs.steps) > 0 {
-			changed := false
+			hasRunning := false
 			for _, s := range m.vs.steps {
-				if !s.done && !s.pending && s.bufIdx < len(m.app.commandsBuf) {
-					m.app.commandsBuf[s.bufIdx] = "  " + spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)] + " " + s.label
-					changed = true
+				if !s.done && !s.pending {
+					hasRunning = true
+					break
 				}
 			}
-			if changed {
-				m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
+			if hasRunning {
+				now := time.Now()
+				frame := spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)]
+				vpW := m.vs.commandsVP.Width
+				lw := m.vs.stepLabelWidth
+				bw := stepBarWidth(vpW, lw)
+				instanceStart := m.app.inst.startedAt
+				estSpan := time.Duration(stepEstSecs * float64(time.Second))
+				pastEstimate := now.Sub(instanceStart) >= estSpan
+				for _, s := range m.vs.steps {
+					if s.pending || s.bufIdx >= len(m.app.commandsBuf) {
+						continue
+					}
+					icon := frame
+					if s.done {
+						if s.ok {
+							icon = "✓"
+						} else {
+							icon = "✗"
+						}
+					}
+					var bar string
+					if !s.done && pastEstimate {
+						bar = shimmerBar(bw, m.vs.spinnerTick)
+					} else {
+						var stepEnd time.Time
+						if s.done {
+							stepEnd = s.finishedAt
+						}
+						bar = stepBar(bw, instanceStart, s.startedAt, stepEnd, estSpan)
+					}
+					m.app.commandsBuf[s.bufIdx] = renderStepLine(icon, s.label, lw, bar)
+				}
+				m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, vpW))
 			}
 		}
 		// Expire flash notification.
@@ -204,8 +237,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stepActivateMsg:
 		if s, ok := m.vs.steps[msg.id]; ok {
 			s.pending = false
+			s.startedAt = time.Now()
 			if s.bufIdx < len(m.app.commandsBuf) {
-				m.app.commandsBuf[s.bufIdx] = "  " + spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)] + " " + s.label
+				frame := spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)]
+				vpW := m.vs.commandsVP.Width
+				lw := m.vs.stepLabelWidth
+				bw := stepBarWidth(vpW, lw)
+				estSpan := time.Duration(stepEstSecs * float64(time.Second))
+				bar := stepBar(bw, m.app.inst.startedAt, s.startedAt, time.Time{}, estSpan)
+				m.app.commandsBuf[s.bufIdx] = renderStepLine(frame, s.label, lw, bar)
 			}
 			m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, m.vs.commandsVP.Width))
 		}
@@ -231,7 +271,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case "ctrl+f":
-			if m.app.inst.name != "" {
+			if m.app.inst.name != "" || len(m.vs.steps) > 0 {
 				if m.vs.fullscreenTarget == 1 {
 					m.vs.fullscreenTarget = 0
 				} else {

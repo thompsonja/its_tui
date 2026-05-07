@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/thompsonja/its_tui/step"
 )
@@ -37,6 +38,7 @@ type instanceRuntime struct {
 	stepCtxs       map[string]stepEntry
 	completedSteps int
 	totalSteps     int
+	startedAt      time.Time // when the current batch of command steps began (for bar timeline)
 }
 
 // appState holds domain state: data that is independent of how it is displayed.

@@ -86,6 +86,8 @@ func (m *model) handleStop() tea.Cmd {
 		return nil
 	}
 	m.vs.steps = map[string]*commandStep{}
+	m.vs.stepLabelWidth = 0
+	m.app.inst.startedAt = time.Now()
 	cancelInstance()
 	instanceCtx, cancelInstance = context.WithCancel(context.Background())
 	m.app.inst.name = ""
@@ -127,6 +129,21 @@ func (m *model) handleStop() tea.Cmd {
 	if state, err := LoadState(sp); err == nil && state.Instance != nil {
 		mfePGID = state.Instance.MFEPGID
 	}
+
+	// Compute aligned label width for stop steps.
+	maxStopLabelW := 0
+	if mfePGID > 0 {
+		if w := len([]rune("stopping MFE")); w > maxStopLabelW {
+			maxStopLabelW = w
+		}
+	}
+	for _, t := range stopTasks {
+		if w := len([]rune(t.label)); w > maxStopLabelW {
+			maxStopLabelW = w
+		}
+	}
+	m.vs.stepLabelWidth = maxStopLabelW
+
 	if mfePGID > 0 {
 		m.startStep("mfe-stop", "stopping MFE")
 	}
@@ -204,7 +221,11 @@ func (m *model) handleRestart(parts []string) tea.Cmd {
 		}
 		go step.WatchStep(stepCtx, def.Step, name)
 	}
-	m.startStep(id, def.effectiveLabel())
+	label := def.effectiveLabel()
+	if w := len([]rune(label)); w > m.vs.stepLabelWidth {
+		m.vs.stepLabelWidth = w
+	}
+	m.startStep(id, label)
 	go func() {
 		if err := UpdateStepState(sp, id, config.StepStatusRunning, nil); err != nil {
 			debugLog("restart: UpdateStepState %q running: %v", id, err)

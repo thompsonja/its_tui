@@ -43,9 +43,10 @@ type viewState struct {
 	fullscreenProgress float64
 	fullscreenTarget   float64
 
-	runningCmds int
-	spinnerTick int
-	steps       map[string]*commandStep
+	runningCmds    int
+	spinnerTick    int
+	steps          map[string]*commandStep
+	stepLabelWidth int // max label width across registered steps; used for bar alignment
 
 	flashMsg   string
 	flashOk    bool

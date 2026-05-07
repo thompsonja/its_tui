@@ -20,28 +20,28 @@ func TestStartPendingStep_LineContainsLabel(t *testing.T) {
 	}
 }
 
-func TestStartPendingStep_LineContainsDep(t *testing.T) {
+func TestStartPendingStep_LineHasPendingIcon(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("skaffold", "Skaffold", []string{"minikube"})
-	if !strings.Contains(m.app.commandsBuf[0], "minikube") {
-		t.Fatalf("expected minikube in line, got %q", m.app.commandsBuf[0])
+	if !strings.Contains(m.app.commandsBuf[0], "○") {
+		t.Fatalf("expected ○ icon in pending line, got %q", m.app.commandsBuf[0])
 	}
 }
 
-func TestStartPendingStep_LineContainsWaitingFor(t *testing.T) {
+func TestStartPendingStep_LineHasEmptyBar(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("skaffold", "Skaffold", []string{"minikube"})
-	if !strings.Contains(m.app.commandsBuf[0], "waiting for") {
-		t.Fatalf("expected 'waiting for' in line, got %q", m.app.commandsBuf[0])
+	if !strings.Contains(m.app.commandsBuf[0], barEmpty) {
+		t.Fatalf("expected empty bar chars in pending line, got %q", m.app.commandsBuf[0])
 	}
 }
 
-func TestStartPendingStep_MultipleDepsAllAppear(t *testing.T) {
+func TestStartPendingStep_LineDoesNotShowDeps(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("app", "App", []string{"infra", "config"})
 	line := m.app.commandsBuf[0]
-	if !strings.Contains(line, "infra") || !strings.Contains(line, "config") {
-		t.Fatalf("expected both deps in line, got %q", line)
+	if strings.Contains(line, "infra") || strings.Contains(line, "config") {
+		t.Fatalf("dep names should not appear in bar line, got %q", line)
 	}
 }
 
@@ -87,17 +87,19 @@ func TestDepReady_PreservesRemainingDep(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("app", "App", []string{"infra", "config"})
 	m.depReady("app", "infra")
-	if !strings.Contains(m.app.commandsBuf[0], "config") {
-		t.Fatalf("expected config to remain in line, got %q", m.app.commandsBuf[0])
+	s := m.vs.steps["app"]
+	if len(s.pendingDeps) != 1 || s.pendingDeps[0] != "config" {
+		t.Fatalf("expected pendingDeps=[config], got %v", s.pendingDeps)
 	}
 }
 
-func TestDepReady_StillShowsWaitingForRemaining(t *testing.T) {
+func TestDepReady_LineUnchangedWhileDepsRemain(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("app", "App", []string{"infra", "config"})
+	before := m.app.commandsBuf[0]
 	m.depReady("app", "infra")
-	if !strings.Contains(m.app.commandsBuf[0], "waiting for") {
-		t.Fatalf("expected still waiting for config, got %q", m.app.commandsBuf[0])
+	if m.app.commandsBuf[0] != before {
+		t.Fatalf("expected line unchanged while deps remain\nbefore: %q\nafter:  %q", before, m.app.commandsBuf[0])
 	}
 }
 
@@ -123,16 +125,17 @@ func TestDepReady_SequentialCompletions(t *testing.T) {
 	m := newStepsModel()
 	m.startPendingStep("app", "App", []string{"a", "b", "c"})
 	m.depReady("app", "a")
-	if strings.Contains(m.app.commandsBuf[0], "\"a\"") || !strings.Contains(m.app.commandsBuf[0], "b") {
-		t.Fatalf("after removing a, expected b and c in line, got %q", m.app.commandsBuf[0])
+	s := m.vs.steps["app"]
+	if len(s.pendingDeps) != 2 {
+		t.Fatalf("after removing a, expected 2 pendingDeps, got %v", s.pendingDeps)
 	}
 	m.depReady("app", "b")
-	if strings.Contains(m.app.commandsBuf[0], "b") || !strings.Contains(m.app.commandsBuf[0], "c") {
-		t.Fatalf("after removing b, expected only c in line, got %q", m.app.commandsBuf[0])
+	if len(s.pendingDeps) != 1 || s.pendingDeps[0] != "c" {
+		t.Fatalf("after removing b, expected pendingDeps=[c], got %v", s.pendingDeps)
 	}
 	m.depReady("app", "c")
-	if strings.Contains(m.app.commandsBuf[0], "waiting") {
-		t.Fatalf("after all deps done, expected no waiting suffix, got %q", m.app.commandsBuf[0])
+	if len(s.pendingDeps) != 0 {
+		t.Fatalf("after all deps done, expected empty pendingDeps, got %v", s.pendingDeps)
 	}
 }
 
@@ -167,8 +170,9 @@ func TestDepReady_MultipleStepsIndependent(t *testing.T) {
 	m.startPendingStep("app", "App", []string{"infra"})
 	m.startPendingStep("worker", "Worker", []string{"infra", "config"})
 	m.depReady("app", "infra")
-	// worker should be unchanged.
-	if !strings.Contains(m.app.commandsBuf[1], "infra") {
-		t.Fatalf("worker line should still contain infra, got %q", m.app.commandsBuf[1])
+	// worker's pendingDeps should be unaffected.
+	worker := m.vs.steps["worker"]
+	if len(worker.pendingDeps) != 2 {
+		t.Fatalf("worker pendingDeps should be unchanged (2), got %v", worker.pendingDeps)
 	}
 }
