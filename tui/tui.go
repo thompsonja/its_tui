@@ -150,6 +150,12 @@ type FieldSpec struct {
 	// auto-merged values are removed and new ones added. Manual selections
 	// are never affected.
 	MergeValuesFunc func(WizardValues) []string
+
+	// LockedFunc, if non-nil, is called during reEvalDynamicFields. When it
+	// returns true the field is displayed with its current value but cannot be
+	// edited. Useful when an external config (e.g. a loaded components file)
+	// owns the field's value and manual edits would conflict.
+	LockedFunc func(WizardValues) bool
 }
 
 // StaticOptions returns an OptionsFunc that always returns the given options.

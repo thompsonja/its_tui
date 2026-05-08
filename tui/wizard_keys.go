@@ -69,6 +69,20 @@ func (m *model) handleWizardKey(msg tea.KeyMsg) {
 	}
 
 	s := &wiz.states[wiz.fieldIdx]
+
+	// Locked fields accept navigation only; all edit keys are ignored.
+	if s.locked {
+		switch key {
+		case "up":
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, -1)
+			wiz.syncFocus()
+		case "down", "enter":
+			wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, 1)
+			wiz.syncFocus()
+		}
+		return
+	}
+
 	next := func() {
 		wiz.fieldIdx = wiz.nextVisibleField(wiz.fieldIdx, 1)
 		wiz.syncFocus()

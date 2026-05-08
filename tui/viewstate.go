@@ -721,17 +721,21 @@ func (vs viewState) renderWizardCustom(app appState) string {
 			}
 		}
 
-		switch s.spec.Kind {
-		case FieldKindSelect:
-			lines = append(lines, renderSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
-		case FieldKindSystemSelect:
-			lines = append(lines, renderSystemSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
-		case FieldKindSingleSelect:
-			lines = append(lines, renderSingleSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
-		case FieldKindText:
-			lines = append(lines, renderTextField(i, s, ws, wiz.fieldIdx, labelW)...)
-		case FieldKindMultiSelect:
-			lines = append(lines, renderMultiSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
+		if s.locked {
+			lines = append(lines, renderLockedField(i, s, ws, wiz.fieldIdx, labelW)...)
+		} else {
+			switch s.spec.Kind {
+			case FieldKindSelect:
+				lines = append(lines, renderSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
+			case FieldKindSystemSelect:
+				lines = append(lines, renderSystemSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
+			case FieldKindSingleSelect:
+				lines = append(lines, renderSingleSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
+			case FieldKindText:
+				lines = append(lines, renderTextField(i, s, ws, wiz.fieldIdx, labelW)...)
+			case FieldKindMultiSelect:
+				lines = append(lines, renderMultiSelectField(i, s, ws, wiz.fieldIdx, labelW)...)
+			}
 		}
 		lastRenderedIdx = i
 	}
@@ -745,6 +749,8 @@ func (vs viewState) renderWizardCustom(app appState) string {
 	if wiz.fieldIdx < numFields {
 		s := &wiz.states[wiz.fieldIdx]
 		switch {
+		case s.locked:
+			hintText = "  ⊘ field is locked  ·  ↑↓ or Tab to move"
 		case s.pickerOpen && s.spec.Kind == FieldKindSystemSelect:
 			hintText = "  ↑↓ navigate  ·  Enter toggle  ·  type to search  ·  Tab done"
 		case s.pickerOpen && (s.spec.Kind == FieldKindSingleSelect || s.spec.Kind == FieldKindMultiSelect):
@@ -970,6 +976,37 @@ func renderSectionHeader(tmpl StepTemplate, values WizardValues, width int) stri
 	}
 	separator := prefix + strings.Repeat(sepChar, remaining)
 	return lipgloss.NewStyle().Foreground(currentTheme.Muted).Render(separator)
+}
+
+// renderLockedField renders a field that cannot be edited. The current value
+// is shown dimmed with a ⊘ prefix so it is visually distinct from editable fields.
+func renderLockedField(i int, s *fieldState, ws wizStyles, activeField, labelW int) []string {
+	var val string
+	switch s.spec.Kind {
+	case FieldKindSelect:
+		if s.selectIdx >= 0 && s.selectIdx < len(s.resolvedOptions) {
+			val = s.resolvedOptions[s.selectIdx]
+		}
+	case FieldKindSingleSelect:
+		val = s.singleValue
+		if val == "" {
+			val = "(none)"
+		}
+	case FieldKindMultiSelect, FieldKindSystemSelect:
+		if len(s.multiValues) == 0 {
+			val = "(none)"
+		} else {
+			val = strings.Join(s.multiValues, ", ")
+		}
+	case FieldKindText:
+		val = s.pickerSearch.Value()
+		if val == "" {
+			val = "(empty)"
+		}
+	}
+	return []string{
+		"  " + wizLabel(s.spec.Label, activeField, i, labelW) + "  " + ws.dim.Render("⊘ "+val),
+	}
 }
 
 func renderSelectField(i int, s *fieldState, ws wizStyles, activeField, labelW int) []string {

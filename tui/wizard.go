@@ -51,6 +51,10 @@ type fieldState struct {
 	// for FieldKindSelect fields. Used to detect whether the user has
 	// manually overridden the auto-selection.
 	lastAutoSelectVal string
+
+	// locked is true when LockedFunc returned true on the last reEvalDynamicFields
+	// call. Locked fields are visible but not editable.
+	locked bool
 }
 
 // startWizard drives the instance-start configuration screen.
@@ -388,6 +392,17 @@ func (w *startWizard) reEvalDynamicFields() {
 			}
 			s.strPickerItems = append([]string(nil), newOpts...)
 			s.updateStrFilter()
+		}
+
+		// Update locked state; close any open picker when the field becomes locked.
+		if s.spec.LockedFunc != nil {
+			nowLocked := s.spec.LockedFunc(vals)
+			if nowLocked && !s.locked && s.pickerOpen {
+				s.pickerOpen = false
+			}
+			s.locked = nowLocked
+		} else {
+			s.locked = false
 		}
 	}
 

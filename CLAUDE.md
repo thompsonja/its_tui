@@ -23,7 +23,7 @@ The Bubbletea `tea.Model` shim is `model` in `model.go`. It is split into two su
 
 `model.app` is the source of truth; `model.vs` is what gets rendered.
 
-The 60fps tick (`tickCmd`) drives spinner frames and card-flip / fullscreen animations.
+The 60fps tick (`tickCmd`) drives spinner frames, progress bar animation (shimmer), and card-flip / fullscreen animations.
 
 `dispatchCommand` returns `tea.Cmd` so command handlers can schedule Bubbletea effects. Currently all built-in handlers return `nil` (they use goroutines + `prog.Send`), but the signature allows future handlers to emit proper `tea.Cmd` values.
 
@@ -41,7 +41,7 @@ The 60fps tick (`tickCmd`) drives spinner frames and card-flip / fullscreen anim
 | `tui/pipeline.go` | `buildDefsFromTemplates`, `topoSortSteps`, `switchToInstance`, resume logic |
 | `tui/execution.go` | `executeStartFromWizard`, `executeStartWithResume` |
 | `tui/commands.go` | `dispatchCommand` + all REPL command handlers (`start`, `stop`, `restart`, `logs`, `status`, `test`, `theme`, custom) |
-| `tui/panel_steps.go` | `commandStep` tracker: `startStep`, `startPendingStep`, `finishStep` |
+| `tui/panel_steps.go` | `commandStep` tracker: `startStep`, `startPendingStep`, `finishStep`, `reRenderStepBars`; timeline progress bars and shimmer animation |
 | `tui/wizard.go` | `startWizard`, `fieldState`, `newStartWizard`, `reEvalDynamicFields` |
 | `tui/wizard_keys.go` | `handleWizardKey` per FieldKind |
 | `tui/history.go` | REPL history (up/down arrows) |
@@ -92,6 +92,8 @@ Field kinds:
 
 `FieldSpec.Options []string` provides a static option list for Select/SingleSelect/MultiSelect fields. `FieldSpec.OptionsFunc` provides dynamic options and takes precedence over `Options` when both are set. `SystemsFunc` is always required for SystemSelect. `reEvalDynamicFields` is called after every change.
 
+`FieldSpec.LockedFunc func(WizardValues) bool` — optional dynamic lock. When it returns `true`, the field renders as read-only (⊘ prefix, dim style) and accepts only navigation keys (`↑↓`/Tab). If the field's picker is open when it becomes locked, the picker is closed automatically. Fields without `LockedFunc` are never locked.
+
 The `overlay overlayKind` and `wizard *startWizard` fields live in `appState` (domain state), not `viewState`. The wizard pointer is model state that persists across render cycles; the overlay kind determines which UI mode is active.
 
 ## Step lifecycle
@@ -114,6 +116,7 @@ type instanceRuntime struct {
     stepCtxs       map[string]stepEntry
     completedSteps int
     totalSteps     int
+    startedAt      time.Time // timeline anchor for progress bars
 }
 ```
 Access via `m.app.inst.*`.
@@ -156,6 +159,24 @@ Steps that complete and don't need resuming (e.g., one-shot `skaffold build`) sh
 - In `Build()`, check `values.IsRestore()`. If true, load the previously generated file path from `StepData` and skip re-generation if the file still exists.
 - On a fresh run, generate the file and save its path to `StepData` so the next restore can find it.
 - Return `(nil, nil)` from `Build()` to indicate this is a side-effect-only step with no running process.
+
+## Commands panel progress bars
+
+Each step running under the current instance is represented by a timeline bar in the Commands panel. The X-axis is shared instance time, so bars can be read as a Gantt chart showing which steps ran in parallel and when.
+
+**Bar rendering** (`panel_steps.go`):
+- `█` = step was active during that time window; `░` = step had not yet started or had already finished
+- Minimum filled width: 1 character — even an instant step shows it ran
+- `stepEstSecs = 60.0` — the assumed total span while the instance is still running; all bars share this fixed horizon so they grow consistently as time passes
+- Once all steps complete, `finishStep` calls `computeStepSpan` with `max(finishedAt)` as the total span and re-renders every bar so the rightmost bar reaches the edge with no trailing gray
+
+**Shimmer** — when instance elapsed time exceeds `stepEstSecs`, any still-running step switches to a shimmer bar (`▓` highlight sweeping left-to-right across `█`) to signal it is overrunning the estimate. Shimmer advances each tick via `vs.spinnerTick`.
+
+**Resize** — `reRenderStepBars()` is called from `resizePanels()` whenever the terminal or fullscreen state changes. It re-renders all non-pending bars to the current `commandsVP.Width` and calls `GotoBottom()` to keep the latest output visible.
+
+**Stop sequence** — `handleStop` resets `app.inst.startedAt` to `time.Now()` before registering stop steps, so stop-step bars use their own independent timeline rather than the original run timeline.
+
+`ctrl+f` (fullscreen toggle for the Commands panel) is available whenever `app.inst.name != ""` or there are visible steps, so the progress view can be expanded during or after a stop sequence.
 
 ## VSCode launch.json management
 
@@ -232,4 +253,5 @@ For custom wiring (e.g. no build step), use the lower-level functions directly: 
 - All log ingestion goes through `Update` message dispatch — no direct viewport mutation from goroutines.
 - `dispatchCommand` returns `tea.Cmd`. All command handler methods (`handleXxx`) return `tea.Cmd`. Handlers that only use goroutines + `prog.Send` return `nil`.
 - Animations are driven by `tickMsg` advancing `flipProgress` / `fullscreenProgress` by a fixed step per frame; the viewport resize happens when the animation settles.
+- `reRenderStepBars` is called from `resizePanels` (after `vs.resize`) to refit progress bars to the new viewport width; it also calls `GotoBottom()` to keep the bottom of the step list in view.
 - Buffer cap is `maxBufLines = 5000`. `appendLine` enforces this.

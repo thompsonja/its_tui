@@ -85,6 +85,11 @@ type Config struct {
     // Root directory for log files. Defaults to "/tmp" if empty.
     // Log files are named <step>_<instanceName>.log (e.g. skaffold_My_Service.log).
     LogDir string
+
+    // Project root used to locate the .vscode folder for automatic launch.json
+    // management. Defaults to the current working directory. Launch configs are
+    // only written/removed when a .vscode directory already exists here.
+    WorkspaceDir string
 }
 ```
 
@@ -151,10 +156,6 @@ type Step interface {
     // Start the process. Block until it is running/ready or has failed.
     // ctx is cancelled when the instance is stopped or restarted.
     Start(ctx context.Context, instanceName string) error
-
-    // Stop performs cleanup when the instance is stopped.
-    // Return nil if no cleanup is needed.
-    Stop(ctx context.Context, instanceName string) error
 }
 ```
 
@@ -182,8 +183,49 @@ func (s *HealthStep) Start(ctx context.Context, name string) error {
     }()
     return nil
 }
-func (s *HealthStep) Stop(ctx context.Context, name string) error {
-    return nil // no cleanup needed
+```
+
+### Optional Step Interfaces
+
+Three optional interfaces extend a `Step` with additional behavior. Implement only what you need.
+
+**`Stopper`** — custom cleanup when the instance is stopped. Steps that don't implement `Stopper`
+are skipped during stop; their processes are already terminated by context cancellation.
+
+```go
+type Stopper interface {
+    Stop(ctx context.Context, instanceName string) error
+}
+```
+
+Use this when stopping requires more than context cancellation: running a teardown command,
+killing a process group, cleaning up cluster resources, etc.
+
+```go
+func (s *MyStep) Stop(ctx context.Context, name string) error {
+    return exec.CommandContext(ctx, "kubectl", "delete", "namespace", name).Run()
+}
+```
+
+**`Resumer`** — controls what happens when the TUI is restarted with an existing session. Without
+this interface, any non-completed step is re-started from scratch.
+
+```go
+type Resumer interface {
+    Resume(ctx context.Context, instanceName string) error
+}
+```
+
+Return `nil` to skip `Start` (the step is still running), return an error to trigger `Start`.
+Long-running processes should save their PID via `tui.SaveStepData` and check liveness in
+`Resume`.
+
+**`Sender`** — accept an injected message sender for isolated testing (useful for unit tests
+that don't start a real `tea.Program`).
+
+```go
+type Sender interface {
+    SetSender(func(any))
 }
 ```
 
@@ -200,6 +242,17 @@ type FieldSpec struct {
     OptionsFunc func(WizardValues) []string // provides choices for Select / SingleSelect / MultiSelect
     SystemsFunc func(WizardValues) []System // provides hierarchy for SystemSelect
     Default     int                         // for Select: index of the default option
+
+    // MergeValuesFunc, if non-nil, returns values to force-select for
+    // MultiSelect/SystemSelect fields based on current wizard state. When the
+    // returned set changes, previously auto-merged values are removed and new
+    // ones added. Manual selections are never affected.
+    MergeValuesFunc func(WizardValues) []string
+
+    // LockedFunc, if non-nil, is evaluated after every field change. When it
+    // returns true the field is displayed read-only (⊘ prefix) and accepts only
+    // navigation keys. See "Locking Fields" below.
+    LockedFunc func(WizardValues) bool
 }
 ```
 
@@ -297,6 +350,39 @@ The functions are called **at wizard-open** (with the initial values) and **afte
 change**, synchronously. They must be fast — a read of a variable or small slice already
 populated by a running step, not a blocking network call. When a dependent field's options change,
 any selections that no longer appear in the new list are automatically dropped.
+
+### Locking Fields
+
+Set `LockedFunc` on a `FieldSpec` to make a field conditionally read-only. When `LockedFunc`
+returns `true`, the field is displayed with a `⊘` prefix in a dimmed style, and all edit keys
+are ignored — only `↑`/`↓` and Tab navigate away from it.
+
+This is useful when an external config (e.g. a loaded components file) owns the field's values
+and manual edits would conflict:
+
+```go
+Fields: []tui.FieldSpec{
+    {
+        ID:    "config_file",
+        Label: "Config",
+        Kind:  tui.FieldKindSingleSelect,
+        OptionsFunc: listConfigFiles,
+    },
+    {
+        ID:    "components",
+        Label: "Components",
+        Kind:  tui.FieldKindSystemSelect,
+        SystemsFunc: loadSystemsFromConfig,
+        // Locked when a config file is selected — the file owns the component list.
+        LockedFunc: func(v tui.WizardValues) bool {
+            return v.String("config_file") != ""
+        },
+    },
+},
+```
+
+`LockedFunc` is re-evaluated after every field change, so locking is reactive. If the field's
+picker is open when it becomes locked, the picker is closed automatically.
 
 ### `WizardValues`
 
@@ -598,6 +684,22 @@ Use `step.Send(step.CommandMsg{Text: "..."})` from handlers to send output to th
 
 The built-in `SkaffoldTemplate` includes example commands (`status` and `info`) that demonstrate the pattern.
 
+## Commands Panel Progress Bars
+
+When a pipeline is running, each step is shown as a timeline bar in the Commands panel. The
+X-axis represents shared instance time (a Gantt-chart view), so you can see which steps ran in
+parallel and when relative to each other.
+
+- `█` — step was active during that window
+- `░` — step had not yet started or had already finished
+- Every step shows at least 1 character of `█`, even if it completed nearly instantly
+- After all steps complete, bars are rescaled so the rightmost bar reaches the edge with no
+  trailing gray
+- If a step is still running past the initial 60-second estimate, its bar switches to a shimmer
+  (`▓` sweeping across `█`) to signal it is overrunning
+
+Press `ctrl+f` to expand the Commands panel to fullscreen for a wider view of the bar chart.
+
 ## REPL Commands
 
 The Commands panel accepts typed commands:
@@ -630,7 +732,7 @@ Command history is navigated with `↑` / `↓` in the Commands panel.
 |------------------|--------|
 | `Tab`            | Cycle focus forward through panels |
 | `Shift+Tab`      | Cycle focus backward |
-| `ctrl+f`         | Toggle fullscreen on the focused panel |
+| `ctrl+f`         | Toggle fullscreen on the Commands panel (available whenever steps are visible) |
 | `Esc`            | Exit fullscreen / close wizard / close help |
 | `t`              | Cycle tabs within a focused content panel |
 | `/`              | Enter search mode in a content panel |
