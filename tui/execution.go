@@ -157,6 +157,7 @@ func (m *model) executeStart(defs []StepDef) {
 	debugLog("executeStart: launching %d steps", len(defs))
 	ctx := instanceCtx
 
+	m.snapshotHistoricalBars()
 	m.vs.steps = map[string]*commandStep{}
 	m.app.inst.stepCtxs = make(map[string]stepEntry)
 	name := m.app.inst.name
@@ -258,6 +259,7 @@ func (m *model) executeStart(defs []StepDef) {
 func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]StepState) {
 	ctx := instanceCtx
 
+	m.snapshotHistoricalBars()
 	m.vs.steps = map[string]*commandStep{}
 	m.app.inst.stepCtxs = make(map[string]stepEntry)
 	name := m.app.inst.name

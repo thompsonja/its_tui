@@ -15,6 +15,59 @@ const (
 	shimmerWidth = 5           // number of ▓ chars in the sweeping highlight
 )
 
+// historicalBar records enough data to re-render a completed step bar at any
+// viewport width. Bars from previous batches are stored here so that resize
+// events can refit them alongside the current batch's bars.
+type historicalBar struct {
+	bufIdx        int
+	icon          string
+	label         string
+	labelWidth    int
+	instanceStart time.Time
+	startedAt     time.Time
+	finishedAt    time.Time
+	span          time.Duration
+}
+
+// snapshotHistoricalBars saves every non-pending step in m.vs.steps to
+// m.vs.historicalBars so it can be re-rendered after m.vs.steps is cleared.
+// Call this immediately before clearing m.vs.steps.
+func (m *model) snapshotHistoricalBars() {
+	if len(m.vs.steps) == 0 {
+		return
+	}
+	instanceStart := m.app.inst.startedAt
+	span := computeStepSpan(instanceStart, m.vs.steps)
+	lw := m.vs.stepLabelWidth
+	for _, s := range m.vs.steps {
+		if s.pending || s.bufIdx >= len(m.app.commandsBuf) {
+			continue
+		}
+		icon := "○"
+		if s.done {
+			if s.ok {
+				icon = "✓"
+			} else {
+				icon = "✗"
+			}
+		}
+		end := s.finishedAt
+		if end.IsZero() {
+			end = time.Now() // step was still running when interrupted
+		}
+		m.vs.historicalBars = append(m.vs.historicalBars, historicalBar{
+			bufIdx:        s.bufIdx,
+			icon:          icon,
+			label:         s.label,
+			labelWidth:    lw,
+			instanceStart: instanceStart,
+			startedAt:     s.startedAt,
+			finishedAt:    end,
+			span:          span,
+		})
+	}
+}
+
 // commandStep tracks a single named step shown in the commands panel.
 // The line at bufIdx is updated in-place as the step progresses.
 type commandStep struct {
@@ -38,10 +91,28 @@ func stepBarWidth(vpWidth, labelWidth int) int {
 	return avail
 }
 
+// computeDynEst returns the current timeline estimate: at least stepEstSecs,
+// but extended so that every activated step has a full stepEstSecs window from
+// its own start time. This is recomputed on each tick so late-starting steps
+// automatically push the estimate out without any explicit extension event.
+func computeDynEst(instanceStart time.Time, steps map[string]*commandStep) time.Duration {
+	est := time.Duration(stepEstSecs * float64(time.Second))
+	for _, s := range steps {
+		if !s.pending && !s.startedAt.IsZero() {
+			budget := s.startedAt.Sub(instanceStart) + time.Duration(stepEstSecs*float64(time.Second))
+			if budget > est {
+				est = budget
+			}
+		}
+	}
+	return est
+}
+
 // computeStepSpan returns the total timeline width to use for bar scaling.
-// While any step is still running it returns the fixed stepEstSecs estimate.
-// Once all steps are done it returns max(finishedAt)-instanceStart so the
-// last-finishing step fills all the way to the right edge with no trailing gray.
+// While any step is still running it returns computeDynEst so that late-starting
+// steps push the estimate out and each step has a fair window. Once all steps
+// are done it returns max(finishedAt)-instanceStart so the last-finishing step
+// fills all the way to the right edge with no trailing gray.
 func computeStepSpan(instanceStart time.Time, steps map[string]*commandStep) time.Duration {
 	if instanceStart.IsZero() {
 		return minStepSpan
@@ -57,7 +128,7 @@ func computeStepSpan(instanceStart time.Time, steps map[string]*commandStep) tim
 		}
 	}
 	if hasRunning {
-		return time.Duration(stepEstSecs * float64(time.Second))
+		return computeDynEst(instanceStart, steps)
 	}
 	if !maxEnd.IsZero() {
 		d := maxEnd.Sub(instanceStart)
@@ -69,19 +140,50 @@ func computeStepSpan(instanceStart time.Time, steps map[string]*commandStep) tim
 	return minStepSpan
 }
 
-// shimmerBar returns a full █ bar with a ▓ highlight sweeping left-to-right,
-// used when a running step has exceeded the estimated duration.
-func shimmerBar(bw, tick int) string {
+// stepStartChar returns the bar column where a step's filled region begins,
+// based on its start time relative to the instance start and the total span.
+func stepStartChar(bw int, instanceStart, stepStart time.Time, totalDur time.Duration) int {
+	if instanceStart.IsZero() || stepStart.IsZero() || totalDur <= 0 {
+		return 0
+	}
+	frac := float64(stepStart.Sub(instanceStart)) / float64(totalDur)
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	c := int(frac * float64(bw))
+	if c >= bw {
+		c = bw - 1
+	}
+	return c
+}
+
+// shimmerBar returns a bar where [0, startChar) is gray (░), the remainder is
+// █ with a ▓ highlight sweeping only within the filled region. Used when a
+// running step has exceeded the estimated duration.
+func shimmerBar(bw, startChar, tick int) string {
+	if startChar < 0 {
+		startChar = 0
+	}
+	if startChar >= bw {
+		startChar = bw - 1
+	}
 	buf := make([]rune, bw)
-	for i := range buf {
+	for i := 0; i < startChar; i++ {
+		buf[i] = '░'
+	}
+	fillWidth := bw - startChar
+	for i := startChar; i < bw; i++ {
 		buf[i] = '█'
 	}
 	// Lead position advances one step every 2 ticks (~30 steps/sec at 60 fps).
-	// Period extends past bw so the window enters and exits cleanly.
-	lead := (tick / 2) % (bw + shimmerWidth)
+	// Period extends past fillWidth so the highlight enters and exits cleanly.
+	lead := (tick / 2) % (fillWidth + shimmerWidth)
 	for w := 0; w < shimmerWidth; w++ {
-		p := lead - shimmerWidth + 1 + w
-		if p >= 0 && p < bw {
+		p := startChar + lead - shimmerWidth + 1 + w
+		if p >= startChar && p < bw {
 			buf[p] = '▓'
 		}
 	}
@@ -197,10 +299,10 @@ func (m *model) reRenderStepBars() {
 	lw := m.vs.stepLabelWidth
 	bw := stepBarWidth(vpW, lw)
 	instanceStart := m.app.inst.startedAt
-	span := computeStepSpan(instanceStart, m.vs.steps)
 	frame := spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)]
-	pastEstimate := !instanceStart.IsZero() &&
-		time.Since(instanceStart) >= time.Duration(stepEstSecs*float64(time.Second))
+
+	dynEst := computeDynEst(instanceStart, m.vs.steps)
+	span := computeStepSpan(instanceStart, m.vs.steps)
 
 	for _, s := range m.vs.steps {
 		if s.bufIdx >= len(m.app.commandsBuf) {
@@ -220,8 +322,11 @@ func (m *model) reRenderStepBars() {
 			}
 		}
 		var bar string
-		if !s.done && pastEstimate {
-			bar = shimmerBar(bw, m.vs.spinnerTick)
+		overBudget := !s.done && !s.startedAt.IsZero() &&
+			time.Since(s.startedAt) >= time.Duration(stepEstSecs*float64(time.Second))
+		if overBudget {
+			sc := stepStartChar(bw, instanceStart, s.startedAt, dynEst)
+			bar = shimmerBar(bw, sc, m.vs.spinnerTick)
 		} else {
 			var stepEnd time.Time
 			if s.done {
@@ -231,6 +336,17 @@ func (m *model) reRenderStepBars() {
 		}
 		m.app.commandsBuf[s.bufIdx] = renderStepLine(icon, s.label, lw, bar)
 	}
+	// Re-render bars from previous batches so they fit the new viewport width.
+	for i := range m.vs.historicalBars {
+		h := &m.vs.historicalBars[i]
+		if h.bufIdx >= len(m.app.commandsBuf) {
+			continue
+		}
+		hBw := stepBarWidth(vpW, h.labelWidth)
+		bar := stepBar(hBw, h.instanceStart, h.startedAt, h.finishedAt, h.span)
+		m.app.commandsBuf[h.bufIdx] = renderStepLine(h.icon, h.label, h.labelWidth, bar)
+	}
+
 	m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, vpW))
 	m.vs.commandsVP.GotoBottom()
 }

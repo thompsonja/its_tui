@@ -47,6 +47,8 @@ type viewState struct {
 	spinnerTick    int
 	steps          map[string]*commandStep
 	stepLabelWidth int // max label width across registered steps; used for bar alignment
+	historicalBars []historicalBar // completed bars from previous batches, re-rendered on resize
+
 
 	flashMsg   string
 	flashOk    bool

@@ -85,6 +85,7 @@ func (m *model) handleStop() tea.Cmd {
 		m.printLine("  no active instance — run: start")
 		return nil
 	}
+	m.snapshotHistoricalBars()
 	m.vs.steps = map[string]*commandStep{}
 	m.vs.stepLabelWidth = 0
 	m.app.inst.startedAt = time.Now()

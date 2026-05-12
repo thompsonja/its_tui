@@ -1,14 +1,88 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"time"
 
 	"github.com/thompsonja/its_tui/builtins"
+	"github.com/thompsonja/its_tui/step"
 	"github.com/thompsonja/its_tui/tui"
 )
+
+// slowStep is a synthetic step that runs for a fixed duration, logging
+// progress every 5 seconds. Useful for testing progress bar behaviour.
+type slowStep struct {
+	id       string
+	duration time.Duration
+}
+
+func (s *slowStep) ID() string                      { return s.id }
+func (s *slowStep) LogPath(_ string) string          { return "" } // direct-send
+
+func (s *slowStep) Start(ctx context.Context, _ string) error {
+	step.Send(step.LineMsg{ID: s.id, Line: fmt.Sprintf("starting, will run for %v", s.duration)})
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		started := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case t := <-ticker.C:
+				elapsed := t.Sub(started).Round(time.Second)
+				step.Send(step.LineMsg{ID: s.id, Line: fmt.Sprintf("running %v / %v", elapsed, s.duration)})
+			}
+		}
+	}()
+
+	// Block until the configured duration elapses, keeping the step "running"
+	// in the tracker so the progress bar animates for the full window.
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-time.After(s.duration):
+		return nil
+	}
+}
+
+// slowStepTemplate returns a StepTemplate for a slow step with the given id
+// and panel. A wizard field lets the user choose the duration (10s/30s/60s/90s).
+// If waitFor is non-empty the step waits for those IDs before starting.
+func slowStepTemplate(id, label string, panel tui.PanelID, waitFor []string) tui.StepTemplate {
+	return tui.StepTemplate{
+		ID:      id,
+		Label:   label,
+		Panel:   panel,
+		WaitFor: waitFor,
+		Fields: []tui.FieldSpec{
+			{
+				ID:          id + "_dur",
+				Label:       label + " duration",
+				Kind:        tui.FieldKindSelect,
+				OptionsFunc: tui.StaticOptions("10s", "30s", "60s", "90s"),
+				Default:     1, // 30s
+			},
+		},
+		Build: func(v tui.WizardValues) (tui.Step, error) {
+			raw := v.String(id + "_dur")
+			secs, _ := strconv.Atoi(raw[:len(raw)-1])
+			if secs <= 0 {
+				secs = 30
+			}
+			return &slowStep{
+				id:       id,
+				duration: time.Duration(secs) * time.Second,
+			}, nil
+		},
+	}
+}
 
 // sampleDir returns the directory containing this source file, so that
 // relative paths like "skaffold.yaml" resolve correctly regardless of where
@@ -149,11 +223,21 @@ func main() {
 		},
 	)
 
+	// Two slow steps for testing progress bar behaviour:
+	//   slow_a — starts immediately alongside other steps
+	//   slow_b — waits for slow_a to finish, so it starts late in the timeline
+	// Set slow_a to 30s and slow_b to 60s+ to observe the estimate extension
+	// and shimmer starting from the correct bar position (not from t=0).
+	slowA := slowStepTemplate("slow_a", "Slow A", tui.PanelTopLeft, nil)
+	slowB := slowStepTemplate("slow_b", "Slow B", tui.PanelTopRight, []string{"slow_a"})
+
 	steps := []tui.StepTemplate{
 		builtins.MinikubeTemplate(),
 		builtins.KubectlTemplate(),
 		envStep,
 		componentsStep,
+		slowA,
+		slowB,
 	}
 	steps = append(steps, skaffoldPipeline.Templates()...)
 	steps = append(steps, mfeStep)
