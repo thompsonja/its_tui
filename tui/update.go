@@ -41,15 +41,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if hasRunning {
-				now := time.Now()
 				frame := spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)]
 				vpW := m.vs.commandsVP.Width
 				lw := m.vs.stepLabelWidth
 				bw := stepBarWidth(vpW, lw)
 				instanceStart := m.app.inst.startedAt
-				// dynEst = max(stepStart + stepEstSecs) across all activated steps,
-				// so each step has a fair window from its own start time.
-				dynEst := computeDynEst(instanceStart, m.vs.steps)
 				span := computeStepSpan(instanceStart, m.vs.steps)
 
 				for _, s := range m.vs.steps {
@@ -64,21 +60,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							icon = "✗"
 						}
 					}
-					var bar string
-					// Shimmer when this step individually exceeds its budget
-					// (stepEstSecs from its own start), not the instance start.
-					overBudget := !s.done && !s.startedAt.IsZero() &&
-						now.Sub(s.startedAt) >= time.Duration(stepEstSecs*float64(time.Second))
-					if overBudget {
-						sc := stepStartChar(bw, instanceStart, s.startedAt, dynEst)
-						bar = shimmerBar(bw, sc, m.vs.spinnerTick)
-					} else {
-						var stepEnd time.Time
-						if s.done {
-							stepEnd = s.finishedAt
-						}
-						bar = stepBar(bw, instanceStart, s.startedAt, stepEnd, span)
+					var stepEnd time.Time
+					if s.done {
+						stepEnd = s.finishedAt
 					}
+					bar := stepBar(bw, instanceStart, s.startedAt, stepEnd, span)
 					m.app.commandsBuf[s.bufIdx] = renderStepLine(icon, s.label, lw, bar)
 				}
 				m.vs.commandsVP.SetContent(wrapContent(m.app.commandsBuf, vpW))

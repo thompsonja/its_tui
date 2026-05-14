@@ -6,13 +6,10 @@ import (
 )
 
 const (
-	barFilled    = "█"
-	barShimmer   = "▓"
-	barEmpty     = "░"
-	minBarWidth  = 4
-	minStepSpan  = time.Second // floor to avoid near-zero division
-	stepEstSecs  = 60.0        // estimated batch duration; shimmer kicks in past this
-	shimmerWidth = 5           // number of ▓ chars in the sweeping highlight
+	barFilled   = "█"
+	barEmpty    = "░"
+	minBarWidth = 4
+	minStepSpan = time.Second // floor to avoid near-zero division
 )
 
 // historicalBar records enough data to re-render a completed step bar at any
@@ -91,15 +88,19 @@ func stepBarWidth(vpWidth, labelWidth int) int {
 	return avail
 }
 
-// computeDynEst returns the current timeline estimate: at least stepEstSecs,
-// but extended so that every activated step has a full stepEstSecs window from
-// its own start time. This is recomputed on each tick so late-starting steps
-// automatically push the estimate out without any explicit extension event.
+// computeDynEst returns the current timeline estimate, always extending to the
+// next full-minute boundary so that running steps never pile up at the right
+// edge. Late-starting steps also push the estimate out by their own window.
 func computeDynEst(instanceStart time.Time, steps map[string]*commandStep) time.Duration {
-	est := time.Duration(stepEstSecs * float64(time.Second))
+	elapsed := time.Since(instanceStart)
+	// Round up to the next whole minute so the bar always has room to grow.
+	est := ((elapsed / time.Minute) + 1) * time.Minute
+	// Give any late-starting step enough room from its own start.
 	for _, s := range steps {
-		if !s.pending && !s.startedAt.IsZero() {
-			budget := s.startedAt.Sub(instanceStart) + time.Duration(stepEstSecs*float64(time.Second))
+		if !s.pending && !s.startedAt.IsZero() && !s.done {
+			offset := s.startedAt.Sub(instanceStart)
+			stepElapsed := time.Since(s.startedAt)
+			budget := offset + ((stepElapsed/time.Minute)+1)*time.Minute
 			if budget > est {
 				est = budget
 			}
@@ -138,56 +139,6 @@ func computeStepSpan(instanceStart time.Time, steps map[string]*commandStep) tim
 		return d
 	}
 	return minStepSpan
-}
-
-// stepStartChar returns the bar column where a step's filled region begins,
-// based on its start time relative to the instance start and the total span.
-func stepStartChar(bw int, instanceStart, stepStart time.Time, totalDur time.Duration) int {
-	if instanceStart.IsZero() || stepStart.IsZero() || totalDur <= 0 {
-		return 0
-	}
-	frac := float64(stepStart.Sub(instanceStart)) / float64(totalDur)
-	if frac < 0 {
-		frac = 0
-	}
-	if frac > 1 {
-		frac = 1
-	}
-	c := int(frac * float64(bw))
-	if c >= bw {
-		c = bw - 1
-	}
-	return c
-}
-
-// shimmerBar returns a bar where [0, startChar) is gray (░), the remainder is
-// █ with a ▓ highlight sweeping only within the filled region. Used when a
-// running step has exceeded the estimated duration.
-func shimmerBar(bw, startChar, tick int) string {
-	if startChar < 0 {
-		startChar = 0
-	}
-	if startChar >= bw {
-		startChar = bw - 1
-	}
-	buf := make([]rune, bw)
-	for i := 0; i < startChar; i++ {
-		buf[i] = '░'
-	}
-	fillWidth := bw - startChar
-	for i := startChar; i < bw; i++ {
-		buf[i] = '█'
-	}
-	// Lead position advances one step every 2 ticks (~30 steps/sec at 60 fps).
-	// Period extends past fillWidth so the highlight enters and exits cleanly.
-	lead := (tick / 2) % (fillWidth + shimmerWidth)
-	for w := 0; w < shimmerWidth; w++ {
-		p := startChar + lead - shimmerWidth + 1 + w
-		if p >= startChar && p < bw {
-			buf[p] = '▓'
-		}
-	}
-	return string(buf)
 }
 
 // stepBar builds the bar string showing when the step was running within the
@@ -301,7 +252,6 @@ func (m *model) reRenderStepBars() {
 	instanceStart := m.app.inst.startedAt
 	frame := spinnerFrames[m.vs.spinnerTick%len(spinnerFrames)]
 
-	dynEst := computeDynEst(instanceStart, m.vs.steps)
 	span := computeStepSpan(instanceStart, m.vs.steps)
 
 	for _, s := range m.vs.steps {
@@ -321,19 +271,11 @@ func (m *model) reRenderStepBars() {
 				icon = "✗"
 			}
 		}
-		var bar string
-		overBudget := !s.done && !s.startedAt.IsZero() &&
-			time.Since(s.startedAt) >= time.Duration(stepEstSecs*float64(time.Second))
-		if overBudget {
-			sc := stepStartChar(bw, instanceStart, s.startedAt, dynEst)
-			bar = shimmerBar(bw, sc, m.vs.spinnerTick)
-		} else {
-			var stepEnd time.Time
-			if s.done {
-				stepEnd = s.finishedAt
-			}
-			bar = stepBar(bw, instanceStart, s.startedAt, stepEnd, span)
+		var stepEnd time.Time
+		if s.done {
+			stepEnd = s.finishedAt
 		}
+		bar := stepBar(bw, instanceStart, s.startedAt, stepEnd, span)
 		m.app.commandsBuf[s.bufIdx] = renderStepLine(icon, s.label, lw, bar)
 	}
 	// Re-render bars from previous batches so they fit the new viewport width.
