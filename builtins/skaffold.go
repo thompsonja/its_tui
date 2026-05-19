@@ -55,7 +55,13 @@ func (s *SkaffoldStep) sender() func(any) {
 	return step.Send
 }
 
-func (s *SkaffoldStep) ID() string                 { return "skaffold" }
+func (s *SkaffoldStep) ID() string {
+	if s.Mode == "build" {
+		return "skaffold_build"
+	}
+	return "skaffold"
+}
+
 func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name, s.Mode) }
 
 // Start launches skaffold and blocks until it signals readiness:
