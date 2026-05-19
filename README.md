@@ -781,6 +781,92 @@ automatically:
 
 These messages are sent by `SkaffoldStep` automatically — no configuration required.
 
+## Headless / CI Mode
+
+`RunHeadless` executes the step pipeline and optional tests without a terminal UI — designed for
+CI/CD environments like GitHub Actions.
+
+```go
+err := tui.RunHeadless(cfg, tui.HeadlessOptions{
+    Values: tui.NewWizardValues(
+        map[string]string{"env": "dev", "api_port": "9001"},
+        map[string][]string{"components": {"checkout-backend", "user-service"}},
+    ),
+    RunTests: []string{"*"},  // run all configured tests after steps complete
+    FailFast: true,           // cancel remaining steps on first failure
+})
+if err != nil {
+    os.Exit(1)
+}
+```
+
+### Output Formatting
+
+When `HeadlessOptions.Formatter` is nil, the formatter is auto-detected:
+
+- **GitHub Actions** (`$GITHUB_ACTIONS=true`): uses `::group::` / `::endgroup::` for collapsible
+  log sections, `::error::` for step failures, `::warning::` for skipped steps, and `::notice::`
+  for timing. Each line is prefixed with `[step-id]`.
+- **Plain text** (default): prefixes each line with `[step-id] > ` for attribution across
+  concurrent steps.
+
+You can provide a custom `CIFormatter` implementation for other CI systems (GitLab CI, Jenkins, etc.).
+
+### CLI Flag Pattern
+
+The library does not prescribe a flag library. Downstream callers define their own flags and
+construct `WizardValues`:
+
+```go
+func main() {
+    headless := flag.Bool("headless", false, "run in CI mode")
+    env := flag.String("env", "dev", "environment")
+    tests := flag.String("test", "", "comma-separated test labels, or * for all")
+    flag.Parse()
+
+    cfg := tui.Config{Steps: mySteps, Tests: myTests}
+
+    if *headless {
+        var testLabels []string
+        if *tests != "" {
+            testLabels = strings.Split(*tests, ",")
+        }
+        err := tui.RunHeadless(cfg, tui.HeadlessOptions{
+            Values:   tui.NewWizardValues(map[string]string{"env": *env}, nil),
+            RunTests: testLabels,
+        })
+        if err != nil {
+            fmt.Fprintln(os.Stderr, err)
+            os.Exit(1)
+        }
+        return
+    }
+
+    tui.Run(cfg)
+}
+```
+
+### HeadlessOptions
+
+| Field      | Type           | Description |
+|------------|----------------|-------------|
+| `Values`   | `WizardValues` | Wizard field values (use `NewWizardValues`) |
+| `Formatter`| `CIFormatter`  | Output formatter (nil = auto-detect) |
+| `RunTests` | `[]string`     | Test labels to run after steps (`"*"` = all) |
+| `FailFast` | `bool`         | Cancel all steps on first failure |
+| `Stdout`   | `io.Writer`    | Override stdout (default: `os.Stdout`) |
+| `Stderr`   | `io.Writer`    | Override stderr (default: `os.Stderr`) |
+
+### Log Files
+
+Step log files are written to disk as usual (controlled by each step's `LogPath` implementation).
+After execution, the formatter prints all log file paths so they can be uploaded as CI artifacts.
+
+### Exit Code
+
+`RunHeadless` returns a non-nil error if any step fails or any requested test fails. The caller
+converts this to an exit code.
+
 ## Full Example
 
 ```go

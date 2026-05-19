@@ -74,15 +74,14 @@ func determineResumeAction(stepID string, savedState map[string]StepState) Resum
 	}
 }
 
-// buildDefsFromTemplates builds a StepDef slice from all templates using values.
-func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
-	debugLog("buildDefsFromTemplates: starting with %d templates", len(m.app.cfg.Steps))
-	sp := m.app.statePath
+// buildDefs builds a StepDef slice from templates using the given values.
+// It returns the defs and any custom commands contributed by step templates.
+func buildDefs(templates []StepTemplate, values WizardValues, statePath string) ([]StepDef, map[string]CommandSpec, error) {
+	debugLog("buildDefs: starting with %d templates", len(templates))
 	var defs []StepDef
+	customCmds := make(map[string]CommandSpec)
 
-	m.app.customCmds = make(map[string]CommandSpec)
-
-	for i, tmpl := range m.app.cfg.Steps {
+	for i, tmpl := range templates {
 		templateLabel := tmpl.Label
 		if templateLabel == "" {
 			templateLabel = tmpl.ID
@@ -90,15 +89,15 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 		if templateLabel == "" {
 			templateLabel = fmt.Sprintf("template[%d]", i)
 		}
-		debugLog("buildDefsFromTemplates: building template %d: %q", i, templateLabel)
+		debugLog("buildDefs: building template %d: %q", i, templateLabel)
 		s, err := tmpl.Build(values)
-		debugLog("buildDefsFromTemplates: template %d (%q) Build() returned", i, templateLabel)
+		debugLog("buildDefs: template %d (%q) Build() returned", i, templateLabel)
 		if err != nil {
 			label := tmpl.Label
 			if label == "" {
 				label = "step"
 			}
-			return nil, fmt.Errorf("%s: %w", label, err)
+			return nil, nil, fmt.Errorf("%s: %w", label, err)
 		}
 		if s == nil {
 			continue
@@ -108,33 +107,33 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 			label = tmpl.LabelFunc(values)
 		}
 		if tmpl.ID != "" && s.ID() != tmpl.ID {
-			return nil, fmt.Errorf("step %q: Step.ID() returned %q but template ID is %q",
+			return nil, nil, fmt.Errorf("step %q: Step.ID() returned %q but template ID is %q",
 				label, s.ID(), tmpl.ID)
 		}
 
 		for _, cmd := range tmpl.Commands {
 			if cmd.Name == "" {
-				return nil, fmt.Errorf("step %q: command has empty Name", label)
+				return nil, nil, fmt.Errorf("step %q: command has empty Name", label)
 			}
 			if cmd.Handler == nil {
-				return nil, fmt.Errorf("step %q: command %q has nil Handler", label, cmd.Name)
+				return nil, nil, fmt.Errorf("step %q: command %q has nil Handler", label, cmd.Name)
 			}
-			if _, exists := m.app.customCmds[cmd.Name]; exists {
-				return nil, fmt.Errorf("command name conflict: %q defined by multiple steps", cmd.Name)
+			if _, exists := customCmds[cmd.Name]; exists {
+				return nil, nil, fmt.Errorf("command name conflict: %q defined by multiple steps", cmd.Name)
 			}
 			builtins := []string{"help", "start", "stop", "restart", "logs", "status", "test", "theme"}
 			for _, b := range builtins {
 				if b == cmd.Name {
-					return nil, fmt.Errorf("step %q: command %q conflicts with built-in command", label, cmd.Name)
+					return nil, nil, fmt.Errorf("step %q: command %q conflicts with built-in command", label, cmd.Name)
 				}
 			}
-			m.app.customCmds[cmd.Name] = cmd
+			customCmds[cmd.Name] = cmd
 		}
 
 		var onReady func()
 		if tmpl.OnReady != nil {
 			fn := tmpl.OnReady
-			onReady = func() { fn(sp) }
+			onReady = func() { fn(statePath) }
 		}
 		defs = append(defs, StepDef{
 			Step: s,
@@ -153,12 +152,22 @@ func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
 	for _, def := range defs {
 		id := def.Step.ID()
 		if prevLabel, exists := seenIDs[id]; exists {
-			return nil, fmt.Errorf("duplicate step ID %q (used by both %q and %q)",
+			return nil, nil, fmt.Errorf("duplicate step ID %q (used by both %q and %q)",
 				id, prevLabel, def.meta.label)
 		}
 		seenIDs[id] = def.meta.label
 	}
 
+	return defs, customCmds, nil
+}
+
+// buildDefsFromTemplates builds a StepDef slice from all templates using values.
+func (m *model) buildDefsFromTemplates(values WizardValues) ([]StepDef, error) {
+	defs, cmds, err := buildDefs(m.app.cfg.Steps, values, m.app.statePath)
+	if err != nil {
+		return nil, err
+	}
+	m.app.customCmds = cmds
 	return defs, nil
 }
 

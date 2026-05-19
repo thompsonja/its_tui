@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/thompsonja/its_tui/builtins"
@@ -96,6 +98,13 @@ func sampleDir() string {
 }
 
 func main() {
+	headless := flag.Bool("headless", false, "run in headless/CI mode")
+	env := flag.String("env", "dev", "environment (dev, test)")
+	apiPort := flag.String("api-port", "9001", "API port (9001, 9002, 9003)")
+	runTests := flag.String("test", "", "test labels to run (comma-separated, or * for all)")
+	failFast := flag.Bool("fail-fast", false, "cancel all steps on first failure")
+	flag.Parse()
+
 	// env step: contributes the "env" and "api_port" selector fields to
 	// the wizard. It does not start a process of its own — the selected
 	// values are read by the skaffold generate callback below.
@@ -261,6 +270,26 @@ func main() {
 				},
 			},
 		},
+	}
+
+	if *headless {
+		var tests []string
+		if *runTests != "" {
+			tests = strings.Split(*runTests, ",")
+		}
+		err := tui.RunHeadless(cfg, tui.HeadlessOptions{
+			Values: tui.NewWizardValues(
+				map[string]string{"env": *env, "api_port": *apiPort},
+				nil,
+			),
+			RunTests: tests,
+			FailFast: *failFast,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if err := tui.Run(cfg); err != nil {

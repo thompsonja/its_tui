@@ -5,33 +5,35 @@
 The `tui` package is organized into focused files based on responsibility:
 
 ### Core Files
-- **`tui.go`** (463 lines) - Public API: Config, StepTemplate, FieldSpec, WizardValues, etc.
-- **`model.go`** (284 lines) - Core Bubbletea model and state
-- **`update.go`** (527 lines) - Bubbletea Update() message handler
-- **`messages.go`** (59 lines) - Message type definitions
+- **`tui.go`** - Public API: Config, StepTemplate, FieldSpec, WizardValues, etc.
+- **`model.go`** - Core Bubbletea model and state
+- **`update.go`** - Bubbletea Update() message handler
+- **`messages.go`** - Message type definitions
+- **`headless.go`** - Headless/CI mode: RunHeadless, HeadlessOptions, event loop
+- **`ci_output.go`** - CIFormatter interface, GitHubActionsFormatter, PlainFormatter
 
 ### Command Handling
-- **`commands.go`** (372 lines) - Command dispatch and handlers
-- **`pipeline.go`** (230 lines) - Pipeline building and validation
-- **`execution.go`** (389 lines) - Pipeline execution logic
-- **`debug.go`** (106 lines) - Debug helpers and clipboard utilities
+- **`commands.go`** - Command dispatch and handlers
+- **`pipeline.go`** - Pipeline building and validation
+- **`execution.go`** - Pipeline execution logic
+- **`debug.go`** - Debug helpers and clipboard utilities
 
 ### UI & Rendering
-- **`view.go`** (1120 lines) - Main View() and rendering logic
-- **`wizard.go`** (394 lines) - Wizard state and logic
-- **`wizard_keys.go`** (243 lines) - Wizard keyboard input handling
-- **`themes.go`** (74 lines) - Theme definitions
-- **`styles.go`** (45 lines) - Style helpers
+- **`view.go`** - Main View() and rendering logic
+- **`wizard.go`** - Wizard state and logic
+- **`wizard_keys.go`** - Wizard keyboard input handling
+- **`themes.go`** - Theme definitions
+- **`styles.go`** - Style helpers
 
 ### Panel Management
-- **`panel_steps.go`** (103 lines) - Step panel coordination
-- **`history.go`** (40 lines) - Command history
-- **`step.go`** (19 lines) - Step utilities
+- **`panel_steps.go`** - Step panel coordination
+- **`history.go`** - Command history
+- **`step.go`** - Step utilities
 
 ### Testing
-- **`pipeline_test.go`** (947 lines) - Pipeline tests
-- **`model_test.go`** (331 lines) - Model tests
-- **`instance_test.go`** (37 lines) - Instance tests
+- **`pipeline_test.go`** - Pipeline tests
+- **`model_test.go`** - Model tests
+- **`instance_test.go`** - Instance tests
 
 ## File Responsibilities
 
@@ -40,7 +42,7 @@ The `tui` package is organized into focused files based on responsibility:
 2. **`pipeline.go`** - Builds StepDef list from templates
 3. **`execution.go`** - Executes steps with dependency management
 
-### Data Flow
+### Data Flow (Interactive)
 ```
 User Input → commands.go → dispatchCommand()
                           ↓
@@ -48,7 +50,7 @@ User Input → commands.go → dispatchCommand()
                           ↓
            wizard.go → buildValues()
                           ↓
-          pipeline.go → buildDefsFromTemplates()
+          pipeline.go → buildDefs()
                           ↓
          execution.go → executeStart() / executeStartWithResume()
                           ↓
@@ -57,6 +59,25 @@ User Input → commands.go → dispatchCommand()
                   update.go handles messages
                           ↓
                    view.go renders UI
+```
+
+### Data Flow (Headless/CI)
+```
+Caller provides WizardValues
+            ↓
+  headless.go → RunHeadless()
+            ↓
+  pipeline.go → buildDefs()
+            ↓
+  headless.go → headlessExecuteSteps()
+            ↓
+        steps execute
+            ↓
+  headless.go → runHeadlessEventLoop()
+            ↓
+  ci_output.go → CIFormatter writes to stdout
+            ↓
+  (optional) runHeadlessTests()
 ```
 
 ## Guidelines

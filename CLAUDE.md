@@ -2,7 +2,7 @@
 
 ## What this is
 
-A Go library (`module github.com/thompsonja/its_tui`) that provides a Bubbletea terminal dashboard for Kubernetes development workflows. Callers import package `tui`, supply a `Config` with step templates, and call `tui.Run()`. The `sample/` directory is the reference binary.
+A Go library (`module github.com/thompsonja/its_tui`) that provides a Bubbletea terminal dashboard for Kubernetes development workflows. Callers import package `tui`, supply a `Config` with step templates, and call `tui.Run()` for interactive mode or `tui.RunHeadless()` for CI/CD. The `sample/` directory is the reference binary.
 
 ## Module layout
 
@@ -31,15 +31,17 @@ The 60fps tick (`tickCmd`) drives spinner frames, progress bar animation (shimme
 
 | File | Purpose |
 |---|---|
-| `tui/tui.go` | Public API: `Config`, `StepTemplate`, `FieldSpec`, `WizardValues`, `PanelID`, `Run()`, type aliases |
+| `tui/tui.go` | Public API: `Config`, `StepTemplate`, `FieldSpec`, `WizardValues`, `PanelID`, `Run()`, `RunHeadless()`, type aliases |
 | `tui/model.go` | `model` struct + `newModel` + `Init` + `cycleFocus` + `resizePanels` + `refreshFocusedPanel` |
 | `tui/appstate.go` | `appState`, `instanceRuntime`, `panelView`, `stepEntry`, `focusedPanelID`, buffer helpers |
 | `tui/viewstate.go` | `viewState`, `resize`, all render methods, `wrapContentSearch` |
 | `tui/update.go` | `Update()` — message dispatch, animation advances, log ingestion |
 | `tui/view.go` | `View()` shim (delegates to `vs.render`), `appendToVP` |
 | `tui/messages.go` | All internal message types (`tickMsg`, `stepDoneMsg`, etc.) |
-| `tui/pipeline.go` | `buildDefsFromTemplates`, `topoSortSteps`, `switchToInstance`, resume logic |
-| `tui/execution.go` | `executeStartFromWizard`, `executeStartWithResume` |
+| `tui/pipeline.go` | `buildDefs` (free function), `buildDefsFromTemplates` (model wrapper), `topoSortSteps`, `switchToInstance`, resume logic |
+| `tui/execution.go` | `executeStartFromWizard`, `executeStartWithResume`, `waitForDeps`, `notifyDependentsOfFailure` |
+| `tui/headless.go` | `RunHeadless`, `HeadlessOptions`, `headlessExecuteSteps`, `runHeadlessEventLoop`, `runHeadlessTests` |
+| `tui/ci_output.go` | `CIFormatter` interface, `GitHubActionsFormatter`, `PlainFormatter` |
 | `tui/commands.go` | `dispatchCommand` + all REPL command handlers (`start`, `stop`, `restart`, `logs`, `status`, `test`, `theme`, custom) |
 | `tui/panel_steps.go` | `commandStep` tracker: `startStep`, `startPendingStep`, `finishStep`, `reRenderStepBars`; timeline progress bars and shimmer animation |
 | `tui/wizard.go` | `startWizard`, `fieldState`, `newStartWizard`, `reEvalDynamicFields` |
@@ -183,6 +185,28 @@ Each step running under the current instance is represented by a timeline bar in
 When debug ports are forwarded, the TUI writes `attach` launch configurations into `.vscode/launch.json` inside `Config.WorkspaceDir`. All TUI-managed entries are prefixed with `its_tui_<instanceName> ` so they can be identified and removed cleanly on `stop`.
 
 This is a no-op when `WorkspaceDir` is empty or when no `.vscode` directory exists there.
+
+## Headless / CI mode
+
+`RunHeadless(cfg Config, opts HeadlessOptions) error` executes the step pipeline without Bubbletea. It reuses the core step execution logic (`buildDefs`, `topoSortSteps`, `waitForDeps`, `notifyDependentsOfFailure`) but replaces the interactive event loop with a channel-based one.
+
+**Architecture:**
+1. `buildDefs()` builds `StepDef` list from templates (same free function used by `buildDefsFromTemplates`)
+2. `headlessExecuteSteps()` launches step goroutines with dependency ordering (analog of `model.executeStart`)
+3. `runHeadlessEventLoop()` consumes messages from a channel, dispatches to a `CIFormatter`, tracks completion count
+4. Optionally `runHeadlessTests()` runs test suites after all steps complete
+
+**Message routing:** `step.Send` is pointed at a `chan any` instead of `prog.Send`. The same message types flow through (`stepDoneMsg`, `stepActivateMsg`, `stepDepReadyMsg`, `stepDepFailedMsg`, `step.LineMsg`, etc.). `waitForDeps` and `notifyDependentsOfFailure` accept a `send func(any)` parameter.
+
+**Output formatting:** The `CIFormatter` interface controls how output is rendered. Two built-in implementations:
+- `GitHubActionsFormatter` — `::group::`, `::error::`, `::warning::` workflow commands; auto-selected when `$GITHUB_ACTIONS=true`
+- `PlainFormatter` — `[step-id] > line` prefixed text output
+
+Both use a mutex for thread-safe writes from concurrent step goroutines.
+
+**Signal handling:** SIGINT/SIGTERM cancel the context, which propagates to all step goroutines.
+
+**Exit semantics:** Returns non-nil error on step failure or test failure. The caller converts to exit code.
 
 ## Adding a new step template
 

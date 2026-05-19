@@ -111,7 +111,7 @@ func (m *model) executeStartFromWizard() {
 }
 
 // waitForDeps blocks until all deps are ready or ctx is cancelled.
-func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}) bool {
+func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}, send func(any)) bool {
 	if len(waitFor) == 0 {
 		return true
 	}
@@ -122,7 +122,7 @@ func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map
 			if ch, ok := ready[dep]; ok {
 				select {
 				case <-ch:
-					prog.Send(stepDepReadyMsg{id: stepID, dep: dep})
+					send(stepDepReadyMsg{id: stepID, dep: dep})
 					remaining <- struct{}{}
 				case <-ctx.Done():
 				}
@@ -142,11 +142,11 @@ func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map
 }
 
 // notifyDependentsOfFailure sends stepDepFailedMsg to every step waiting on failedID.
-func notifyDependentsOfFailure(defs []StepDef, failedID string) {
+func notifyDependentsOfFailure(defs []StepDef, failedID string, send func(any)) {
 	for _, otherDef := range defs {
 		for _, dep := range otherDef.meta.waitFor {
 			if dep == failedID {
-				prog.Send(stepDepFailedMsg{id: otherDef.Step.ID(), failedDep: failedID})
+				send(stepDepFailedMsg{id: otherDef.Step.ID(), failedDep: failedID})
 			}
 		}
 	}
@@ -156,6 +156,7 @@ func notifyDependentsOfFailure(defs []StepDef, failedID string) {
 func (m *model) executeStart(defs []StepDef) {
 	debugLog("executeStart: launching %d steps", len(defs))
 	ctx := instanceCtx
+	send := func(msg any) { prog.Send(msg) }
 
 	m.snapshotHistoricalBars()
 	m.vs.steps = map[string]*commandStep{}
@@ -212,13 +213,13 @@ func (m *model) executeStart(defs []StepDef) {
 		stepCtx := m.app.inst.stepCtxs[id].ctx
 		go func() {
 			debugLog("executeStart: step %q: waiting for dependencies: %v", id, def.meta.waitFor)
-			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready, send) {
 				debugLog("executeStart: step %q: dependency wait cancelled", id)
 				return
 			}
 			debugLog("executeStart: step %q: dependencies ready, starting", id)
 			if len(def.meta.waitFor) > 0 {
-				prog.Send(stepActivateMsg{id: id})
+				send(stepActivateMsg{id: id})
 			}
 
 			if err := UpdateStepState(sp, id, config.StepStatusRunning, nil); err != nil {
@@ -232,9 +233,9 @@ func (m *model) executeStart(defs []StepDef) {
 					debugLog("executeStart: step %q: UpdateStepState failed: %v", id, stateErr)
 				}
 				close(ready[id])
-				notifyDependentsOfFailure(defs, id)
+				notifyDependentsOfFailure(defs, id, send)
 				if !def.meta.hidden {
-					prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
+					send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
 				}
 				return
 			}
@@ -248,7 +249,7 @@ func (m *model) executeStart(defs []StepDef) {
 				go def.meta.onReady()
 			}
 			if !def.meta.hidden {
-				prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
+				send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 			}
 		}()
 	}
@@ -258,6 +259,7 @@ func (m *model) executeStart(defs []StepDef) {
 // executeStartWithResume launches steps with resume logic based on saved state.
 func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]StepState) {
 	ctx := instanceCtx
+	send := func(msg any) { prog.Send(msg) }
 
 	m.snapshotHistoricalBars()
 	m.vs.steps = map[string]*commandStep{}
@@ -340,12 +342,12 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		debugLog("executeStartWithResume: step %q action=%s", id, action)
 
 		go func() {
-			if !waitForDeps(ctx, id, def.meta.waitFor, ready) {
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready, send) {
 				debugLog("executeStartWithResume: step %q: dependency wait cancelled", id)
 				return
 			}
 			if len(def.meta.waitFor) > 0 {
-				prog.Send(stepActivateMsg{id: id})
+				send(stepActivateMsg{id: id})
 			}
 
 			var err error
@@ -390,9 +392,9 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 					debugLog("executeStartWithResume: step %q: UpdateStepState failed: %v", id, stateErr)
 				}
 				close(ready[id])
-				notifyDependentsOfFailure(defs, id)
+				notifyDependentsOfFailure(defs, id, send)
 				if !def.meta.hidden {
-					prog.Send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
+					send(stepDoneMsg{id: id, ok: false, label: def.effectiveLabel() + " failed: " + err.Error()})
 				}
 				return
 			}
@@ -407,7 +409,7 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				go def.meta.onReady()
 			}
 			if !def.meta.hidden {
-				prog.Send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
+				send(stepDoneMsg{id: id, ok: true, label: def.effectiveLabel() + " running"})
 			}
 		}()
 	}
