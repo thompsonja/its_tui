@@ -87,7 +87,7 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 		absPath = s.Path
 	}
 
-	if mode == "run" || mode == "build" {
+	if mode == "run" || mode == "build" || mode == "deploy" {
 		return s.startRunMode(ctx, lf, absPath, mode)
 	}
 	return s.startWatchMode(ctx, instanceName, lf, absPath, mode)
@@ -236,7 +236,7 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, instanceName string, 
 // log). Dead or no PID → return error so Start() redeploys.
 func (s *SkaffoldStep) Resume(_ context.Context, instanceName string) error {
 	switch s.Mode {
-	case "run", "build":
+	case "run", "build", "deploy":
 		step.DebugLog("skaffold %s Resume(): run/build mode — skipping (work persists)", s.Mode)
 		return nil // deployment / images already exist; nothing to do
 	default:
@@ -380,7 +380,7 @@ func skaffoldDeployComplete(line string) bool {
 
 // SkaffoldConfig holds the generated skaffold file path and profiles.
 // It is used to share configuration between SkaffoldFileGeneratorTemplate
-// and multiple skaffold step templates (build, dev, run, debug).
+// and multiple skaffold step templates (build, deploy, dev, run, debug).
 type SkaffoldConfig struct {
 	Path     string
 	Profiles []string
