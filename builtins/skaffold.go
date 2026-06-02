@@ -34,6 +34,7 @@ type SkaffoldStep struct {
 	Path      string    // path to skaffold.yaml
 	Mode      string    // "dev", "run", or "debug"; defaults to "dev"
 	Profiles  []string  // optional skaffold profiles to activate (--profile flags)
+	ExtraArgs []string  // additional flags appended to the skaffold command
 	StatePath string    // path to state.json; defaults to config.DefaultStatePath()
 	send      func(any) // injected sender; falls back to global Send
 }
@@ -101,6 +102,7 @@ func (s *SkaffoldStep) startRunMode(ctx context.Context, lf *os.File, absPath, m
 	for _, p := range s.Profiles {
 		args = append(args, "--profile", p)
 	}
+ 	args = append(args, s.ExtraArgs...)
 	cmd := exec.CommandContext(ctx, "skaffold", args...)
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.Stdout = lf
@@ -134,6 +136,7 @@ func (s *SkaffoldStep) startWatchMode(ctx context.Context, instanceName string, 
 		args = append(args, "--profile", p)
 	}
 	// Use exec.Command (not CommandContext) so we can manage the process group.
+	args = append(args, s.ExtraArgs...)
 	cmd := exec.Command("skaffold", args...)
 	cmd.Dir = filepath.Dir(absPath)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
