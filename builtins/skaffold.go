@@ -31,12 +31,13 @@ func SkaffoldLogPath(instanceName, mode string) string {
 // SkaffoldStep runs `skaffold <mode>` and streams output to the Skaffold panel.
 // It depends on minikube being ready before Start is called.
 type SkaffoldStep struct {
-	Path      string    // path to skaffold.yaml
-	Mode      string    // "dev", "run", or "debug"; defaults to "dev"
-	Profiles  []string  // optional skaffold profiles to activate (--profile flags)
-	ExtraArgs []string  // additional flags appended to the skaffold command
-	StatePath string    // path to state.json; defaults to config.DefaultStatePath()
-	send      func(any) // injected sender; falls back to global Send
+	Path       string    // path to skaffold.yaml
+	Mode       string    // "dev", "run", or "debug"; defaults to "dev"
+	Profiles   []string  // optional skaffold profiles to activate (--profile flags)
+	ExtraArgs  []string  // additional flags appended to the skaffold command
+	IDOverride string    // if set, overrides the default ID derived from Mode
+	StatePath  string    // path to state.json; defaults to config.DefaultStatePath()
+	send       func(any) // injected sender; falls back to global Send
 }
 
 // SetSender injects a message sender for testing. Falls back to the global Send.
@@ -57,13 +58,21 @@ func (s *SkaffoldStep) sender() func(any) {
 }
 
 func (s *SkaffoldStep) ID() string {
+	if s.IDOverride != "" {
+		return s.IDOverride
+	}
 	if s.Mode == "build" {
 		return "skaffold_build"
 	}
 	return "skaffold"
 }
 
-func (s *SkaffoldStep) LogPath(name string) string { return SkaffoldLogPath(name, s.Mode) }
+func (s *SkaffoldStep) LogPath(name string) string {
+	if s.IDOverride != "" {
+		return SkaffoldLogPath(name, s.IDOverride)
+	}
+	return SkaffoldLogPath(name, s.Mode)
+}
 
 // Start launches skaffold and blocks until it signals readiness:
 //   - run mode: blocks until the process exits (success = ready, failure = error).
@@ -76,7 +85,7 @@ func (s *SkaffoldStep) Start(ctx context.Context, instanceName string) error {
 	}
 	step.DebugLog("skaffold %s Start() called for instance %q", mode, instanceName)
 
-	logPath := SkaffoldLogPath(instanceName, mode)
+	logPath := s.LogPath(instanceName)
 	os.Remove(logPath) // clear previous log so tail -F starts fresh
 	lf, err := os.Create(logPath)
 	if err != nil {

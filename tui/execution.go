@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/thompsonja/its_tui/config"
@@ -111,7 +112,8 @@ func (m *model) executeStartFromWizard() {
 }
 
 // waitForDeps blocks until all deps are ready or ctx is cancelled.
-func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}, send func(any)) bool {
+// Returns false if ctx was cancelled or any dependency failed.
+func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map[string]chan struct{}, failed map[string]bool, failedMu *sync.Mutex, send func(any)) bool {
 	if len(waitFor) == 0 {
 		return true
 	}
@@ -135,6 +137,13 @@ func waitForDeps(ctx context.Context, stepID string, waitFor []string, ready map
 		select {
 		case <-remaining:
 		case <-ctx.Done():
+			return false
+		}
+	}
+	failedMu.Lock()
+	defer failedMu.Unlock()
+	for _, dep := range waitFor {
+		if failed[dep] {
 			return false
 		}
 	}
@@ -175,6 +184,8 @@ func (m *model) executeStart(defs []StepDef) {
 	}
 
 	ready := make(map[string]chan struct{}, len(defs))
+	failed := make(map[string]bool)
+	var failedMu sync.Mutex
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
@@ -213,8 +224,8 @@ func (m *model) executeStart(defs []StepDef) {
 		stepCtx := m.app.inst.stepCtxs[id].ctx
 		go func() {
 			debugLog("executeStart: step %q: waiting for dependencies: %v", id, def.meta.waitFor)
-			if !waitForDeps(ctx, id, def.meta.waitFor, ready, send) {
-				debugLog("executeStart: step %q: dependency wait cancelled", id)
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready, failed, &failedMu, send) {
+				debugLog("executeStart: step %q: dependency wait cancelled or failed", id)
 				return
 			}
 			debugLog("executeStart: step %q: dependencies ready, starting", id)
@@ -232,6 +243,9 @@ func (m *model) executeStart(defs []StepDef) {
 				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
 					debugLog("executeStart: step %q: UpdateStepState failed: %v", id, stateErr)
 				}
+				failedMu.Lock()
+				failed[id] = true
+				failedMu.Unlock()
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id, send)
 				if !def.meta.hidden {
@@ -277,6 +291,8 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 	}
 
 	ready := make(map[string]chan struct{}, len(defs))
+	failed := make(map[string]bool)
+	var failedMu sync.Mutex
 	for _, def := range defs {
 		id := def.Step.ID()
 		ready[id] = make(chan struct{})
@@ -342,8 +358,8 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 		debugLog("executeStartWithResume: step %q action=%s", id, action)
 
 		go func() {
-			if !waitForDeps(ctx, id, def.meta.waitFor, ready, send) {
-				debugLog("executeStartWithResume: step %q: dependency wait cancelled", id)
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready, failed, &failedMu, send) {
+				debugLog("executeStartWithResume: step %q: dependency wait cancelled or failed", id)
 				return
 			}
 			if len(def.meta.waitFor) > 0 {
@@ -391,6 +407,9 @@ func (m *model) executeStartWithResume(defs []StepDef, savedStates map[string]St
 				if stateErr := UpdateStepState(sp, id, config.StepStatusFailed, err); stateErr != nil {
 					debugLog("executeStartWithResume: step %q: UpdateStepState failed: %v", id, stateErr)
 				}
+				failedMu.Lock()
+				failed[id] = true
+				failedMu.Unlock()
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id, send)
 				if !def.meta.hidden {

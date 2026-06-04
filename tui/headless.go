@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -152,6 +153,8 @@ func headlessExecuteSteps(ctx context.Context, defs []StepDef, instanceName, sta
 	sortedDefs := topoSortSteps(defs)
 
 	ready := make(map[string]chan struct{}, len(defs))
+	failed := make(map[string]bool)
+	var failedMu sync.Mutex
 	for _, def := range defs {
 		ready[def.Step.ID()] = make(chan struct{})
 	}
@@ -165,7 +168,7 @@ func headlessExecuteSteps(ctx context.Context, defs []StepDef, instanceName, sta
 		}
 
 		go func() {
-			if !waitForDeps(ctx, id, def.meta.waitFor, ready, send) {
+			if !waitForDeps(ctx, id, def.meta.waitFor, ready, failed, &failedMu, send) {
 				return
 			}
 			send(stepActivateMsg{id: id})
@@ -176,6 +179,9 @@ func headlessExecuteSteps(ctx context.Context, defs []StepDef, instanceName, sta
 
 			if err := def.Step.Start(ctx, instanceName); err != nil {
 				_ = UpdateStepState(statePath, id, config.StepStatusFailed, err)
+				failedMu.Lock()
+				failed[id] = true
+				failedMu.Unlock()
 				close(ready[id])
 				notifyDependentsOfFailure(defs, id, send)
 				if !def.meta.hidden {
